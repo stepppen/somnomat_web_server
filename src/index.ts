@@ -28,6 +28,7 @@ app.post('/api/log', (req: Request, res: Response) => {
   res.json({ action });
 });
 
+//listening
 app.listen(PORT, () => {
   console.log(`Server running on port: ${PORT}`);
   console.log('FRONTEND_URL configured as:', process.env.FRONTEND_URL);
