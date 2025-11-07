@@ -1,0 +1,15 @@
+{
+    "occupancy": [
+      "sleep_occupancy_day1.csv",
+      "sleep_occupancy_day2.csv",
+      "sleep_occupancy_day3.csv",
+      "sleep_occupancy_day4.csv",
+      "sleep_occupancy_day5.csv",
+      "sleep_occupancy_day6.csv",
+      "sleep_occupancy_day7.csv"
+    ],
+    "bedpower": [
+      "bed_power_day1.csv"
+    ]
+  }
+  

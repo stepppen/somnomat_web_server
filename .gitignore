@@ -22,3 +22,16 @@ logs
 .env
 .env.*
 !.env.example
+
+# py stuff
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+data.db
+data.db-journal
+*.sqlite
