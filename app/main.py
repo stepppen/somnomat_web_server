@@ -4,13 +4,14 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 from typing import Optional, List
 import random
+import os
 
 app = FastAPI(title="Somnomat MVP API")
 
-# CORS
+# CORS - Allow all origins (already correct)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your domains
+    allow_origins=["*"],  # Allows all origins including your Netlify frontend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -153,6 +154,22 @@ def generate_occupancy_samples(intervals: List[dict], samples_per_minute: int = 
     return samples
 
 # ----- Health Check -----
+@app.get("/")
+def root():
+    """Root endpoint"""
+    return {
+        "status": "Somnomat API is running",
+        "version": "0.1.0",
+        "endpoints": {
+            "health": "/health",
+            "test": "/test",
+            "devices": "/devices",
+            "esp32_startup": "/esp32/{device_id}/startup",
+            "esp32_sensors": "/esp32/{device_id}/sensors",
+            "esp32_poll": "/esp32/{device_id}/poll"
+        }
+    }
+
 @app.get("/health")
 def health():
     return {
@@ -405,4 +422,7 @@ def test_endpoint():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    # Get port from environment variable (Render provides this)
+    port = int(os.environ.get("PORT", 10000))
+    print(f"Starting server on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
