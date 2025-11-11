@@ -51,15 +51,6 @@ class ESPSensorData(BaseModel):
     Acceleration: float
     Intensity: float
 
-    @field_validator("Occupancy", mode="before")
-    @classmethod
-    def occupancy_to_bool(cls, v):
-        if isinstance(v, bool):
-            return v
-        if isinstance(v, str):
-            return v.lower() == "true"
-        raise ValueError("Occupancy -> boolean or 'true'/'false' string")
-
 class PWACommand(BaseModel):
     device_id: str
     command: str
@@ -490,7 +481,6 @@ def esp32_startup(device_id: str, data: ESPStartupData):
     return {"success": True, "message": f"Device {device_id} registered"}
 
 @app.post("/esp32/{device_id}/sensors")
-
 def esp32_sensors(device_id: str, data: ESPSensorData):
     """ESP32 -> sends sensor readings"""
     global push_task
