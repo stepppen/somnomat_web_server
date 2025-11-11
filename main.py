@@ -46,7 +46,7 @@ class ESPStartupData(BaseModel):
 class ESPSensorData(BaseModel):
     Temperature: float
     MotorStatus: str
-    Occupancy: str
+    Occupancy: bool
     Speed: float
     Acceleration: float
     Intensity: float
