@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 import random
@@ -50,6 +50,15 @@ class ESPSensorData(BaseModel):
     Speed: float
     Acceleration: float
     Intensity: float
+
+    @field_validator("Occupancy", mode="before")
+    @classmethod
+    def occupancy_to_bool(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.lower() == "true"
+        raise ValueError("Occupancy -> boolean or 'true'/'false' string")
 
 class PWACommand(BaseModel):
     device_id: str
@@ -481,6 +490,7 @@ def esp32_startup(device_id: str, data: ESPStartupData):
     return {"success": True, "message": f"Device {device_id} registered"}
 
 @app.post("/esp32/{device_id}/sensors")
+
 def esp32_sensors(device_id: str, data: ESPSensorData):
     """ESP32 -> sends sensor readings"""
     global push_task
