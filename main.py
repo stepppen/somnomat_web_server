@@ -453,22 +453,46 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         "last_seen": datetime.now().isoformat()
     })
     
-    device_record = {
-        "device_id": device_id,  # This must match the primary key column name in your devices table
-        "custom_name": data.CustomName,
-        "status": data.Status,
-        "partition": data.ActualPartition,
-        "version_factory": data.VersionFactory,
-        "version_ota1": data.VersionOTA1,
-        "version_ota2": data.VersionOTA2,
-        "sd_free_storage": data.SDFreeStorage,
-        "mac": data.MAC,
-        "last_seen": datetime.now().isoformat()
-    }
-    
     try:
-        # Use upsert to insert or update
-        supabase.table("devices").upsert(device_record, on_conflict="device_id").execute()
+        # First, check if device exists
+        existing = supabase.table("devices")\
+            .select("id")\
+            .eq("device_id", device_id)\
+            .execute()
+        
+        if existing.data:
+            # Update existing device
+            device_record = {
+                "custom_name": data.CustomName,
+                "status": data.Status,
+                "partition": data.ActualPartition,
+                "version_factory": data.VersionFactory,
+                "version_ota1": data.VersionOTA1,
+                "version_ota2": data.VersionOTA2,
+                "sd_free_storage": data.SDFreeStorage,
+                "mac": data.MAC,
+                "last_seen": datetime.now().isoformat()
+            }
+            supabase.table("devices")\
+                .update(device_record)\
+                .eq("device_id", device_id)\
+                .execute()
+        else:
+            # Insert new device (let id auto-generate)
+            device_record = {
+                "device_id": device_id,
+                "custom_name": data.CustomName,
+                "status": data.Status,
+                "partition": data.ActualPartition,
+                "version_factory": data.VersionFactory,
+                "version_ota1": data.VersionOTA1,
+                "version_ota2": data.VersionOTA2,
+                "sd_free_storage": data.SDFreeStorage,
+                "mac": data.MAC,
+                "last_seen": datetime.now().isoformat()
+            }
+            supabase.table("devices").insert(device_record).execute()
+            
     except Exception as e:
         print(f"Error upserting device: {e}")
     
