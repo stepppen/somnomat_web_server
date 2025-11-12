@@ -1,8 +1,9 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
+from contextlib import asynccontextmanager
 import random
 import os
 from dotenv import load_dotenv
@@ -10,8 +11,17 @@ from supabase import create_client, Client
 import asyncio
 import math
 
+active_push_tasks: Dict[str, asyncio.Task] = {}
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    for task in active_push_tasks.values():
+        task.cancel()
+
+
 load_dotenv()
-app = FastAPI(title="MVP 1.1 API")
+app = FastAPI(title="MVP 1.1 API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,6 +40,7 @@ latest_data = {}
 pending_commands = {} 
 sleep_data = {} 
 aggregated_occupancy = [] 
+
 
 push_task = None
 
@@ -481,9 +492,10 @@ def esp32_startup(device_id: str, data: ESPStartupData):
     return {"success": True, "message": f"Device {device_id} registered"}
 
 @app.post("/esp32/{device_id}/sensors")
-def esp32_sensors(device_id: str, data: ESPSensorData):
+async def esp32_sensors(device_id: str, data: ESPSensorData):
     """ESP32 -> sends sensor readings"""
-    global push_task
+    global active_push_tasks
+    
     if device_id not in latest_data:
         latest_data[device_id] = {}
     
@@ -498,9 +510,8 @@ def esp32_sensors(device_id: str, data: ESPSensorData):
     })
 
     aggregate_occupancy(data.Occupancy)
-    if push_task is None or push_task.done():
-        push_task = asyncio.create_task(push_aggregated_data(device_id))
-
+    if device_id not in active_push_tasks or active_push_tasks[device_id].done():
+        active_push_tasks[device_id] = asyncio.create_task(push_aggregated_data(device_id))
     
     return {"success": True}
 
