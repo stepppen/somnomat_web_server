@@ -25,7 +25,7 @@ app = FastAPI(title="MVP 1.1 API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=os.environ.get("FRONTEND_URL", "").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,6 +40,16 @@ latest_data = {}
 pending_commands = {} 
 sleep_data = {} 
 aggregated_occupancy = [] 
+
+default_metrics = {
+    "consistency_score": 0,
+    "consistency_sd_minutes": 0,
+    "bed_on_coverage_pct": 0,
+    "avg_sleep_per_night": 0,
+    "total_intervals": 0,
+    "total_nights": 0,
+    "avg_awakenings": 0
+}
 
 
 push_task = None
@@ -107,71 +117,51 @@ async def push_aggregated_data(device_id: str):
         try:
             result = supabase.table("devices").select("id").eq("id", device_id).execute()
             if not result.data:
-                print(f"⚠ Device {device_id} not registered. Skipping metric computation.")
+                print(f"Device {device_id} not registered. Skipping metric computation.")
                 continue
         except Exception as e:
             print(f"Error checking device in push_aggregated_data: {e}")
             continue
 
-        # Execute functions that calculate different values off of occupancy
-        metrics = compute_sleep_metrics(device_id, occupied)
-        
-        # Safety check - ensure metrics is a dict
-        if not isinstance(metrics, dict):
-            print(f"⚠ compute_sleep_metrics returned {type(metrics)} instead of dict")
-            continue
-
-        record = {
-            "device_id": device_id,
-            "created_at": datetime.now().isoformat(),
-            "occupied": occupied,
-            "sleep_consistency": metrics.get("consistency_score", 0),
-            "bedtime_consistency": metrics.get("consistency_sd_minutes", 0),
-            "bed_use": metrics.get("bed_on_coverage_pct", 0),
-            "daily_occupancy": metrics.get("avg_sleep_per_night", 0), 
-            "total_intervals": metrics.get("total_intervals", 0),
-            "total_nights": metrics.get("total_nights", 0),
-            "avg_sleep_per_night": metrics.get("avg_sleep_per_night", 0),
-        }
-
         try:
-            supabase.table("sleep_dashboard").insert(record).execute()
-            print(f"✓ Pushed aggregated data for {device_id} at {datetime.now()}")
+            current_record = {
+                "device_id": device_id,
+                "created_at": datetime.now().isoformat(),
+                "occupied": occupied
+            }
+            supabase.table("raw_occupancy").insert(current_record).execute()
+
         except Exception as e:
-            print(f"✗ Error pushing data: {e}")
+            print(f"Error inserting raw occupancy: {e}")
+            return default_metrics
+
+        # record = {
+        #     "device_id": device_id,
+        #     "created_at": datetime.now().isoformat(),
+        #     "occupied": occupied,
+        #     "sleep_consistency": metrics.get("consistency_score", 0),
+        #     "bedtime_consistency": metrics.get("consistency_sd_minutes", 0),
+        #     "bed_use": metrics.get("bed_on_coverage_pct", 0),
+        #     "daily_occupancy": metrics.get("avg_sleep_per_night", 0), 
+        #     "total_intervals": metrics.get("total_intervals", 0),
+        #     "total_nights": metrics.get("total_nights", 0),
+        #     "avg_sleep_per_night": metrics.get("avg_sleep_per_night", 0),
+        # }
+
+        # try:
+        #     supabase.table("sleep_dashboard").insert(record).execute()
+        #     print(f"✓ Pushed aggregated data for {device_id} at {datetime.now()}")
+        # except Exception as e:
+        #     print(f"✗ Error pushing data: {e}")
 
 
 #calculating sleep metrics
-def compute_sleep_metrics(device_id: str, occupied: bool) -> Dict:
+def compute_sleep_metrics(device_id: str) -> Dict:
     """
     Compute sleep metrics based on current occupancy and historical data.
     Returns a dictionary with all metrics, even if errors occur.
     """
-    # Default metrics to return if something fails
-    default_metrics = {
-        "consistency_score": 0,
-        "consistency_sd_minutes": 0,
-        "bed_on_coverage_pct": 0,
-        "avg_sleep_per_night": 0,
-        "total_intervals": 0,
-        "total_nights": 0,
-        "avg_awakenings": 0
-    }
-    
-    # Insert current raw occupancy record
-    try:
-        current_record = {
-            "device_id": device_id,
-            "created_at": datetime.now().isoformat(),
-            "occupied": occupied
-        }
-        supabase.table("raw_occupancy").insert(current_record).execute()
-    except Exception as e:
-        print(f"Error inserting raw occupancy: {e}")
-        # Return default metrics if device doesn't exist yet
-        return default_metrics
-    
-    # Fetch historical data
+
     now = datetime.now()
     seven_days_ago = now - timedelta(days=7)
     
@@ -188,45 +178,42 @@ def compute_sleep_metrics(device_id: str, occupied: bool) -> Dict:
         print(f"Error fetching historical data: {e}")
         return default_metrics
     
-    # Build intervals from occupancy data
     occ_intervals = build_occupancy_intervals(occupancy_rows)
     
     if not occ_intervals:
         return default_metrics
     
-    # Calculate all metrics
-    total_sleep = compute_total_sleep(occ_intervals)
+    total_sleep_min = compute_total_sleep(occ_intervals)
     total_nights = count_nights(occ_intervals)
     avg_sleep = compute_avg_sleep_per_night(occ_intervals)
     avg_awakenings = compute_avg_awakenings(occ_intervals)
     
-    # Calculate consistency metrics
     bedtimes = []
     for iv in occ_intervals:
-        # Use start time as bedtime
         bedtime_minutes = iv["start"].hour * 60 + iv["start"].minute
         bedtimes.append(bedtime_minutes)
     
     if bedtimes:
         import statistics
         consistency_sd = statistics.stdev(bedtimes) if len(bedtimes) > 1 else 0
-        # Convert SD to a 0-100 consistency score (lower SD = higher consistency)
         consistency_score = max(0, 100 - (consistency_sd / 60 * 100))
     else:
         consistency_sd = 0
         consistency_score = 0
     
-    # Calculate bed usage percentage (time in bed vs total time)
-    bed_use_pct = (total_sleep / (7 * 24 * 60)) * 100 if total_sleep > 0 else 0
+    bed_use_pct = (total_sleep_min / (7 * 24 * 60)) * 100 if total_sleep_min > 0 else 0
     
     return {
         "consistency_score": round(consistency_score, 2),
         "consistency_sd_minutes": round(consistency_sd, 2),
         "bed_on_coverage_pct": round(bed_use_pct, 2),
-        "avg_sleep_per_night": round(avg_sleep, 2),
+        "avg_sleep_per_night_min": round(avg_sleep, 2),
+        "avg_sleep_per_night_hours": round((avg_sleep / 60), 2),
         "total_intervals": len(occ_intervals),
         "total_nights": total_nights,
-        "avg_awakenings": round(avg_awakenings, 2)
+        "avg_awakenings": round(avg_awakenings, 2),
+        "total_sleep_min": round(total_sleep_min, 2),
+        "total_sleep_hours": round((total_sleep_min / 60), 2)
     }
 
 def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
@@ -236,7 +223,7 @@ def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
     if not rows:
         return []
     
-    samples = sorted(rows, key=lambda x: x["created_at"])  # Changed from "timestamp"
+    samples = sorted(rows, key=lambda x: x["created_at"]) 
     MIN_SEG_SEC = 120 
     
     intervals = []
@@ -245,7 +232,7 @@ def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
     last_timestamp = None
     
     for sample in samples:
-        timestamp = datetime.fromisoformat(sample["created_at"].replace("Z", ""))  # Changed
+        timestamp = datetime.fromisoformat(sample["created_at"].replace("Z", "")) 
         occupied = sample.get("occupied", False)
 
         if occupied and not in_occ:
@@ -528,8 +515,8 @@ def esp32_startup(device_id: str, data: ESPStartupData):
     
     try:
         device_record = {
-            "id": device_id,  # This is the primary key
-            "device_id": device_id,  # This is a separate field
+            "id": device_id,  
+            "device_id": device_id, 
             "custom_name": data.CustomName,
             "status": data.Status,
             "partition": data.ActualPartition,
@@ -541,7 +528,6 @@ def esp32_startup(device_id: str, data: ESPStartupData):
             "last_seen": datetime.now().isoformat()
         }
         
-        # Use upsert to handle both insert and update cases
         result = supabase.table("devices")\
             .upsert(device_record, on_conflict="id")\
             .execute()
@@ -551,7 +537,6 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         
     except Exception as e:
         print(f"✗ ERROR upserting device {device_id}: {e}")
-        # Return error but with 200 status so ESP32 knows what went wrong
         return {"success": False, "message": f"Failed to register device: {str(e)}", "device_id": device_id}
 
     
@@ -560,7 +545,6 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
     """ESP32 -> sends sensor readings"""
     global active_push_tasks
     
-    # First, ensure device exists in Supabase
     try:
         result = supabase.table("devices").select("id").eq("id", device_id).execute()
         if not result.data:
@@ -634,16 +618,24 @@ def esp32_poll(device_id: str):
 @app.get("/devices")
 def list_devices():
     """Get all devices with data"""
-    devices = []
-    for device_id, data in latest_data.items():
-        devices.append({
-            "device_id": device_id,
-            **data
-        })
-    return {"devices": devices, "total": len(devices)}
+    try:
+        response = supabase.table("devices")\
+            .select("*")\
+            .execute()
+        
+    except Exception as e:
+        print(f"Error fetching devices: {e}")
+        # return default_metrics
+    
+    # devices = []
+    # for device_id, data in latest_data.items():
+    #     devices.append({
+    #         "device_id": device_id,
+    #         **data
+    #     })
+    return response
 
-#where the real-time values should be fetched from specific ESP e.g. occupied
-#Buffers data in memory for aggregation
+#where the real-time values are fetched from specific ESP e.g. occupied
 @app.get("/devices/{device_id}")
 def get_device(device_id: str):
     """Get specific device data"""
@@ -677,104 +669,61 @@ def create_command(cmd: PWACommand):
         "message": f"Command '{cmd.command}' queued for {cmd.device_id}"
     }
 
-# ----- Sleep Data individual endpoints (not needed for now as we have summary endpoint)
-# @app.get("/sleep/{device_id}/intervals")
-# def get_sleep_intervals(device_id: str, days: int = 7):
-#     """Get sleep occupancy intervals for a device"""
-#     if device_id not in sleep_data:
-#         # Generate if not exists
-#         intervals = generate_sleep_intervals(device_id, days)
-#         sleep_data[device_id] = {
-#             "intervals": intervals,
-#             "events": generate_bed_events(intervals),
-#             "samples": generate_occupancy_samples(intervals)
-#         }
-    
-#     return {
-#         "device_id": device_id,
-#         "intervals": sleep_data[device_id]["intervals"],
-#         "total": len(sleep_data[device_id]["intervals"])
-#     }
-
-# @app.get("/sleep/{device_id}/events")
-# def get_bed_events(device_id: str):
-#     if device_id not in sleep_data:
-#         raise HTTPException(status_code=404, detail="No sleep data for device")
-    
-#     return {
-#         "device_id": device_id,
-#         "events": sleep_data[device_id]["events"],
-#         "total": len(sleep_data[device_id]["events"])
-#     }
-
-# @app.get("/sleep/{device_id}/samples")
-# def get_occupancy_samples(device_id: str):
-#     """Get raw occupancy sensor samples"""
-#     if device_id not in sleep_data:
-#         raise HTTPException(status_code=404, detail="No sleep data for device")
-    
-#     return {
-#         "device_id": device_id,
-#         "samples": sleep_data[device_id]["samples"],
-#         "total": len(sleep_data[device_id]["samples"])
-#     }
 
 
-
-#where the aggregated values should be fetched from DB 
+#where the aggregated values are fetched from func 
 @app.get("/sleep/{device_id}/summary")
 def get_sleep_summary(device_id: str):
     """Get full sleep summary for dashboard"""
+
+    metrics: Dict = compute_sleep_metrics(device_id)
+    devices = supabase.table("devices").select("*").eq("id", device_id).execute()
+
     # debuggin
     print(f"[DEBUG] Summary requested for device: {device_id}")
-    print(f"[DEBUG] Available devices: {list(latest_data.keys())}")
-    print(f"[DEBUG] Sleep data devices: {list(sleep_data.keys())}")
+    print(f"[DEBUG] Available device: {devices.data}")
+    # print(f"[DEBUG] Sleep data devices: {list(sleep_data.keys())}")
+
+    # if device_id not in devices:
+    #     available = list(devices.keys())
+    #     raise HTTPException(
+    #         status_code=404, 
+    #         detail=f"Device {device_id} not found. Available devices: {available}."
+    #     )
+    intervals = metrics.get("total_intervals", [])
     
-    if device_id not in latest_data:
-        available = list(latest_data.keys())
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Device {device_id} not found. Available devices: {available}. Make sure the ESP32 simulator is running."
-        )
-    
-    # Generate sleep data on-demand if not exists
-    if device_id not in sleep_data:
-        print(f"[DEBUG] Generating sleep data for {device_id}")
-        intervals = generate_sleep_intervals(device_id, days=7)
-        sleep_data[device_id] = {
-            "intervals": intervals,
-            "events": generate_bed_events(intervals),
-            "samples": generate_occupancy_samples(intervals)
-        }
-        print(f"[DEBUG] Generated {len(intervals)} intervals")
-    
-    data = sleep_data[device_id]
-    intervals = data["intervals"]
-    total_sleep_min = sum(iv["duration_min"] for iv in intervals)
-    avg_sleep_per_night = total_sleep_min / 7 
-    
-    # Group by day and count awakenings
-    from collections import defaultdict
-    by_day = defaultdict(list)
+    # Convert datetime objects to ISO strings for JSON serialization
+    intervals_serializable = []
     for iv in intervals:
-        day = iv["start"][:10]  # YYYY-MM-DD
-        by_day[day].append(iv)
+        intervals_serializable.append({
+            "start": iv["start"].isoformat(),
+            "end": iv["end"].isoformat(),
+            "duration_min": iv["duration_min"]
+        })
     
-    awakenings_per_day = {day: len(ivs) - 1 for day, ivs in by_day.items()}
-    avg_awakenings = sum(awakenings_per_day.values()) / len(awakenings_per_day) if by_day else 0
     
     return {
         "device_id": device_id,
         "summary": {
-            "total_sleep_hours": round(total_sleep_min / 60, 1),
-            "avg_sleep_per_night_hours": round(avg_sleep_per_night / 60, 1),
-            "total_nights": len(by_day),
-            "total_intervals": len(intervals),
-            "avg_awakenings_per_night": round(avg_awakenings, 1),
-            "awakenings_by_day": awakenings_per_day
-        },
-        "intervals": intervals,
-        "events": data["events"]
+            "created_at": datetime.now().isoformat(),
+            "sleep_consistency": metrics.get("consistency_score", 0),
+            "bedtime_consistency": metrics.get("consistency_sd_minutes", 0),
+            "bed_use": metrics.get("bed_on_coverage_pct", 0),
+
+            # average values
+            "daily_occupancy": metrics.get("avg_sleep_per_night", 0), 
+            "avg_sleep_per_night_min": metrics.get("avg_sleep_per_night_min", 0),
+            "avg_sleep_per_night_hours": metrics.get("avg_sleep_per_night_hours", 0),
+            "avg_awakenings_per_night": metrics.get("avg_awakenings", 0),
+
+            # total values
+            "total_intervals": metrics.get("total_intervals", 0),
+            "total_nights": metrics.get("total_nights", 0),
+            "total_sleep_min": metrics.get("total_sleep_min", 0),
+            "total_sleep_hours": metrics.get("total_sleep_hours", 0),
+
+            "intervals": intervals_serializable
+        }
     }
 
 # ----- Debug Endpoint -----
