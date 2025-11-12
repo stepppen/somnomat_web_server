@@ -25,7 +25,7 @@ app = FastAPI(title="MVP 1.1 API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("FRONTEND_URL", "").split(","),
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,6 +40,7 @@ latest_data = {}
 pending_commands = {} 
 sleep_data = {} 
 aggregated_occupancy = [] 
+occ_intervals = []
 
 default_metrics = {
     "consistency_score": 0,
@@ -690,16 +691,7 @@ def get_sleep_summary(device_id: str):
     #         status_code=404, 
     #         detail=f"Device {device_id} not found. Available devices: {available}."
     #     )
-    intervals = metrics.get("total_intervals", [])
-    
-    # Convert datetime objects to ISO strings for JSON serialization
-    intervals_serializable = []
-    for iv in intervals:
-        intervals_serializable.append({
-            "start": iv["start"].isoformat(),
-            "end": iv["end"].isoformat(),
-            "duration_min": iv["duration_min"]
-        })
+
     
     
     return {
@@ -722,7 +714,7 @@ def get_sleep_summary(device_id: str):
             "total_sleep_min": metrics.get("total_sleep_min", 0),
             "total_sleep_hours": metrics.get("total_sleep_hours", 0),
 
-            "intervals": intervals_serializable
+            "intervals": occ_intervals
         }
     }
 
