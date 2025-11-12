@@ -100,11 +100,26 @@ async def push_aggregated_data(device_id: str):
         batch = aggregated_occupancy.copy()
         aggregated_occupancy.clear()
 
-        #one bool for whole minute
+        # One bool for whole minute
         occupied = summarize_minute(batch)
 
-        #execute functions that calculate different values off of occupancy
+        # Check if device exists before computing metrics
+        try:
+            result = supabase.table("devices").select("id").eq("id", device_id).execute()
+            if not result.data:
+                print(f"⚠ Device {device_id} not registered. Skipping metric computation.")
+                continue
+        except Exception as e:
+            print(f"Error checking device in push_aggregated_data: {e}")
+            continue
+
+        # Execute functions that calculate different values off of occupancy
         metrics = compute_sleep_metrics(device_id, occupied)
+        
+        # Safety check - ensure metrics is a dict
+        if not isinstance(metrics, dict):
+            print(f"⚠ compute_sleep_metrics returned {type(metrics)} instead of dict")
+            continue
 
         record = {
             "device_id": device_id,
@@ -119,42 +134,100 @@ async def push_aggregated_data(device_id: str):
             "avg_sleep_per_night": metrics.get("avg_sleep_per_night", 0),
         }
 
-
         try:
             supabase.table("sleep_dashboard").insert(record).execute()
-            print(f"Pushed aggregated data for {device_id} at {datetime.now()}")
+            print(f"✓ Pushed aggregated data for {device_id} at {datetime.now()}")
         except Exception as e:
-            print(f"Error pushing data: {e}")
+            print(f"✗ Error pushing data: {e}")
 
 
 #calculating sleep metrics
 def compute_sleep_metrics(device_id: str, occupied: bool) -> Dict:
     """
     Compute sleep metrics based on current occupancy and historical data.
+    Returns a dictionary with all metrics, even if errors occur.
     """
+    # Default metrics to return if something fails
+    default_metrics = {
+        "consistency_score": 0,
+        "consistency_sd_minutes": 0,
+        "bed_on_coverage_pct": 0,
+        "avg_sleep_per_night": 0,
+        "total_intervals": 0,
+        "total_nights": 0,
+        "avg_awakenings": 0
+    }
+    
+    # Insert current raw occupancy record
     try:
         current_record = {
             "device_id": device_id,
-            "created_at": datetime.now().isoformat(),  # Changed from "timestamp"
+            "created_at": datetime.now().isoformat(),
             "occupied": occupied
         }
         supabase.table("raw_occupancy").insert(current_record).execute()
     except Exception as e:
         print(f"Error inserting raw occupancy: {e}")
+        # Return default metrics if device doesn't exist yet
+        return default_metrics
     
+    # Fetch historical data
     now = datetime.now()
     seven_days_ago = now - timedelta(days=7)
     
     try:
-        response = supabase.table("raw_occupancy").select("*").eq("device_id", device_id).gte("created_at", seven_days_ago.isoformat()).order("created_at").execute()
+        response = supabase.table("raw_occupancy")\
+            .select("*")\
+            .eq("device_id", device_id)\
+            .gte("created_at", seven_days_ago.isoformat())\
+            .order("created_at")\
+            .execute()
         
         occupancy_rows = response.data
     except Exception as e:
         print(f"Error fetching historical data: {e}")
-        occupancy_rows = []
+        return default_metrics
     
+    # Build intervals from occupancy data
     occ_intervals = build_occupancy_intervals(occupancy_rows)
-    # ... rest of function
+    
+    if not occ_intervals:
+        return default_metrics
+    
+    # Calculate all metrics
+    total_sleep = compute_total_sleep(occ_intervals)
+    total_nights = count_nights(occ_intervals)
+    avg_sleep = compute_avg_sleep_per_night(occ_intervals)
+    avg_awakenings = compute_avg_awakenings(occ_intervals)
+    
+    # Calculate consistency metrics
+    bedtimes = []
+    for iv in occ_intervals:
+        # Use start time as bedtime
+        bedtime_minutes = iv["start"].hour * 60 + iv["start"].minute
+        bedtimes.append(bedtime_minutes)
+    
+    if bedtimes:
+        import statistics
+        consistency_sd = statistics.stdev(bedtimes) if len(bedtimes) > 1 else 0
+        # Convert SD to a 0-100 consistency score (lower SD = higher consistency)
+        consistency_score = max(0, 100 - (consistency_sd / 60 * 100))
+    else:
+        consistency_sd = 0
+        consistency_score = 0
+    
+    # Calculate bed usage percentage (time in bed vs total time)
+    bed_use_pct = (total_sleep / (7 * 24 * 60)) * 100 if total_sleep > 0 else 0
+    
+    return {
+        "consistency_score": round(consistency_score, 2),
+        "consistency_sd_minutes": round(consistency_sd, 2),
+        "bed_on_coverage_pct": round(bed_use_pct, 2),
+        "avg_sleep_per_night": round(avg_sleep, 2),
+        "total_intervals": len(occ_intervals),
+        "total_nights": total_nights,
+        "avg_awakenings": round(avg_awakenings, 2)
+    }
 
 def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
     """
@@ -455,8 +528,8 @@ def esp32_startup(device_id: str, data: ESPStartupData):
     
     try:
         device_record = {
-            "id": device_id,
-            "device_id": device_id,
+            "id": device_id,  # This is the primary key
+            "device_id": device_id,  # This is a separate field
             "custom_name": data.CustomName,
             "status": data.Status,
             "partition": data.ActualPartition,
@@ -468,22 +541,57 @@ def esp32_startup(device_id: str, data: ESPStartupData):
             "last_seen": datetime.now().isoformat()
         }
         
+        # Use upsert to handle both insert and update cases
         result = supabase.table("devices")\
             .upsert(device_record, on_conflict="id")\
             .execute()
         
         print(f"✓ Upserted device {device_id}: {result.data}")
-        return {"success": True, "message": f"Device {device_id} registered"}
+        return {"success": True, "message": f"Device {device_id} registered", "device_id": device_id}
         
     except Exception as e:
         print(f"✗ ERROR upserting device {device_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to register device: {str(e)}")
+        # Return error but with 200 status so ESP32 knows what went wrong
+        return {"success": False, "message": f"Failed to register device: {str(e)}", "device_id": device_id}
+
     
 @app.post("/esp32/{device_id}/sensors")
 async def esp32_sensors(device_id: str, data: ESPSensorData):
     """ESP32 -> sends sensor readings"""
     global active_push_tasks
     
+    # First, ensure device exists in Supabase
+    try:
+        result = supabase.table("devices").select("id").eq("id", device_id).execute()
+        if not result.data:
+            # Device doesn't exist - log but don't fail
+            print(f"⚠ Device {device_id} not found in database. Sensor data stored in memory only.")
+            # Store in memory but skip database operations
+            if device_id not in latest_data:
+                latest_data[device_id] = {}
+            
+            latest_data[device_id].update({
+                "temperature": data.Temperature,
+                "motor_status": data.MotorStatus,
+                "occupancy": data.Occupancy,
+                "speed": data.Speed,
+                "acceleration": data.Acceleration,
+                "intensity": data.Intensity,
+                "last_seen": datetime.now().isoformat()
+            })
+            
+            # Still aggregate occupancy for when device gets registered
+            aggregate_occupancy(data.Occupancy)
+            
+            return {
+                "success": True, 
+                "warning": "Device not registered. Call /startup endpoint first."
+            }
+    except Exception as e:
+        print(f"Error checking device existence: {e}")
+        # Continue anyway - don't block sensor data
+    
+    # Update in-memory data
     if device_id not in latest_data:
         latest_data[device_id] = {}
     
@@ -497,7 +605,10 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
         "last_seen": datetime.now().isoformat()
     })
 
+    # Aggregate occupancy data
     aggregate_occupancy(data.Occupancy)
+    
+    # Start background task if not already running
     if device_id not in active_push_tasks or active_push_tasks[device_id].done():
         active_push_tasks[device_id] = asyncio.create_task(push_aggregated_data(device_id))
     
