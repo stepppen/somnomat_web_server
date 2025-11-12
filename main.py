@@ -454,50 +454,31 @@ def esp32_startup(device_id: str, data: ESPStartupData):
     })
     
     try:
-        # First, check if device exists
-        existing = supabase.table("devices")\
-            .select("id")\
-            .eq("device_id", device_id)\
+        device_record = {
+            "id": device_id,
+            "device_id": device_id,
+            "custom_name": data.CustomName,
+            "status": data.Status,
+            "partition": data.ActualPartition,
+            "version_factory": data.VersionFactory,
+            "version_ota1": data.VersionOTA1,
+            "version_ota2": data.VersionOTA2,
+            "sd_free_storage": data.SDFreeStorage,
+            "mac": data.MAC,
+            "last_seen": datetime.now().isoformat()
+        }
+        
+        result = supabase.table("devices")\
+            .upsert(device_record, on_conflict="id")\
             .execute()
         
-        if existing.data:
-            # Update existing device
-            device_record = {
-                "custom_name": data.CustomName,
-                "status": data.Status,
-                "partition": data.ActualPartition,
-                "version_factory": data.VersionFactory,
-                "version_ota1": data.VersionOTA1,
-                "version_ota2": data.VersionOTA2,
-                "sd_free_storage": data.SDFreeStorage,
-                "mac": data.MAC,
-                "last_seen": datetime.now().isoformat()
-            }
-            supabase.table("devices")\
-                .update(device_record)\
-                .eq("device_id", device_id)\
-                .execute()
-        else:
-            # Insert new device (let id auto-generate)
-            device_record = {
-                "device_id": device_id,
-                "custom_name": data.CustomName,
-                "status": data.Status,
-                "partition": data.ActualPartition,
-                "version_factory": data.VersionFactory,
-                "version_ota1": data.VersionOTA1,
-                "version_ota2": data.VersionOTA2,
-                "sd_free_storage": data.SDFreeStorage,
-                "mac": data.MAC,
-                "last_seen": datetime.now().isoformat()
-            }
-            supabase.table("devices").insert(device_record).execute()
-            
+        print(f"✓ Upserted device {device_id}: {result.data}")
+        return {"success": True, "message": f"Device {device_id} registered"}
+        
     except Exception as e:
-        print(f"Error upserting device: {e}")
+        print(f"✗ ERROR upserting device {device_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to register device: {str(e)}")
     
-    return {"success": True, "message": f"Device {device_id} registered"}
-
 @app.post("/esp32/{device_id}/sensors")
 async def esp32_sensors(device_id: str, data: ESPSensorData):
     """ESP32 -> sends sensor readings"""
