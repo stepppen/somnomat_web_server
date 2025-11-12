@@ -29,7 +29,7 @@ supabase: Client = create_client(url, key)
 latest_data = {}  
 pending_commands = {} 
 sleep_data = {} 
-aggregated_occupancy = {} 
+aggregated_occupancy = [] 
 
 push_task = None
 
@@ -499,7 +499,7 @@ def esp32_sensors(device_id: str, data: ESPSensorData):
 
     aggregate_occupancy(data.Occupancy)
     if push_task is None or push_task.done():
-            push_task = asyncio.create_task(push_aggregated_data())
+        push_task = asyncio.create_task(push_aggregated_data(device_id))
 
     
     return {"success": True}
