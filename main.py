@@ -135,24 +135,18 @@ def compute_sleep_metrics(device_id: str, occupied: bool) -> Dict:
     try:
         current_record = {
             "device_id": device_id,
-            "timestamp": datetime.now().isoformat(),
+            "created_at": datetime.now().isoformat(),  # Changed from "timestamp"
             "occupied": occupied
         }
         supabase.table("raw_occupancy").insert(current_record).execute()
     except Exception as e:
         print(f"Error inserting raw occupancy: {e}")
     
-
     now = datetime.now()
     seven_days_ago = now - timedelta(days=7)
     
     try:
-        response = supabase.table("raw_occupancy")\
-            .select("*")\
-            .eq("device_id", device_id)\
-            .gte("timestamp", seven_days_ago.isoformat())\
-            .order("timestamp")\
-            .execute()
+        response = supabase.table("raw_occupancy").select("*").eq("device_id", device_id).gte("created_at", seven_days_ago.isoformat()).order("created_at").execute()
         
         occupancy_rows = response.data
     except Exception as e:
@@ -160,19 +154,7 @@ def compute_sleep_metrics(device_id: str, occupied: bool) -> Dict:
         occupancy_rows = []
     
     occ_intervals = build_occupancy_intervals(occupancy_rows)
-    
-    metrics = {
-        "total_sleep_minutes": compute_total_sleep(occ_intervals),
-        "total_nights": count_nights(occ_intervals),
-        "total_intervals": len(occ_intervals),
-        "avg_sleep_per_night": compute_avg_sleep_per_night(occ_intervals),
-        "avg_awakenings_per_night": compute_avg_awakenings(occ_intervals),
-        "awakenings_last_night": compute_awakenings_last_night(occ_intervals),
-        "consistency_score": compute_consistency_score(occ_intervals),
-        "consistency_sd_minutes": compute_consistency_sd(occ_intervals)
-    }
-    
-    return metrics
+    # ... rest of function
 
 def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
     """
@@ -181,7 +163,7 @@ def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
     if not rows:
         return []
     
-    samples = sorted(rows, key=lambda x: x["timestamp"])
+    samples = sorted(rows, key=lambda x: x["created_at"])  # Changed from "timestamp"
     MIN_SEG_SEC = 120 
     
     intervals = []
@@ -190,9 +172,9 @@ def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
     last_timestamp = None
     
     for sample in samples:
-        timestamp = datetime.fromisoformat(sample["timestamp"].replace("Z", ""))
+        timestamp = datetime.fromisoformat(sample["created_at"].replace("Z", ""))  # Changed
         occupied = sample.get("occupied", False)
-        
+
         if occupied and not in_occ:
             in_occ = True
             current_start = timestamp
@@ -459,7 +441,6 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         latest_data[device_id] = {}
         pending_commands[device_id] = []
         
-    
     latest_data[device_id].update({
         "custom_name": data.CustomName,
         "status": data.Status,
@@ -471,9 +452,9 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         "mac": data.MAC,
         "last_seen": datetime.now().isoformat()
     })
+    
     device_record = {
-        "device_id": device_id,  
-        "name": data.CustomName,
+        "device_id": device_id,  # This must match the primary key column name in your devices table
         "custom_name": data.CustomName,
         "status": data.Status,
         "partition": data.ActualPartition,
@@ -484,8 +465,10 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         "mac": data.MAC,
         "last_seen": datetime.now().isoformat()
     }
+    
     try:
-        supabase.table("devices").upsert(device_record).execute()
+        # Use upsert to insert or update
+        supabase.table("devices").upsert(device_record, on_conflict="device_id").execute()
     except Exception as e:
         print(f"Error upserting device: {e}")
     
