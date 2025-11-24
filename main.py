@@ -58,7 +58,7 @@ push_task = None
 class ESPStartupData(BaseModel):
     CustomName: str
     Status: str
-    ActualPartition: str
+    ActualPartition: int
     VersionFactory: str
     VersionOTA1: str
     VersionOTA2: str
