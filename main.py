@@ -412,7 +412,7 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         }
         
         result = supabase.table("devices")\
-            .upsert(device_record, on_conflict="id")\
+            .upsert(device_record)\
             .execute()
         
         print(f"upserted device {device_id}: {result.data}")
@@ -430,6 +430,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
     
     try:
         result = supabase.table("devices").select("id").eq("id", int(device_id)).execute()
+        print(f"Result from eq: {result}")
         if not result.data:
             # Device doesn't exist - log but don't fail
             print(f"⚠ Device {device_id} not found in database. Sensor data stored in memory only.")
