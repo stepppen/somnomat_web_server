@@ -388,7 +388,7 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         "custom_name": data.CustomName,
         "status": data.Status,
         "partition": data.ActualPartition,
-        "version_factory": data.VersionFactory,
+        "version": data.VersionFactory,
         "version_ota1": data.VersionOTA1,
         "version_ota2": data.VersionOTA2,
         "sd_free_storage": data.SDFreeStorage,
@@ -401,21 +401,28 @@ def esp32_startup(device_id: str, data: ESPStartupData):
             "id": int(device_id),  
             "name": data.CustomName,
             "status": data.Status,
+            "temperature": data.Temperature,
+            "mac": data.MAC,
+        }
+        firmware_record = {
+            "device_id": int(device_id),  
+            "version": data.VersionFactory,
             "partition": data.ActualPartition,
-            "version_factory": data.VersionFactory,
             "version_ota1": data.VersionOTA1,
             "version_ota2": data.VersionOTA2,
-            "temperature": data.Temperature,
             "sd_free_storage": data.SDFreeStorage,
-            "mac": data.MAC,
             "last_seen": datetime.now().isoformat()
         }
         
-        result = supabase.table("devices")\
+        result_devices = supabase.table("devices")\
             .upsert(device_record)\
             .execute()
         
-        print(f"upserted device {device_id}: {result.data}")
+        result_firmware = supabase.table("firmware")\
+            .upsert(firmware_record)\
+            .execute()
+        
+        print(f"upserted device {device_id}: {result_devices.data}")
         return {"success": True, "message": f"Device {device_id} registered", "device_id": device_id}
         
     except Exception as e:
