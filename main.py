@@ -415,11 +415,11 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         }
         
         result_devices = supabase.table("devices")\
-            .upsert(device_record)\
+            .upsert(device_record, on_conflict='id')\
             .execute()
         
         result_firmware = supabase.table("firmware")\
-            .upsert(firmware_record)\
+            .upsert(firmware_record, on_conflict='device_id')\
             .execute()
         
         print(f"upserted device {device_id}: {result_devices.data}")
