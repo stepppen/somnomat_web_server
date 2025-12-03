@@ -67,13 +67,14 @@ class ESPStartupData(BaseModel):
     SDFreeStorage: float
 
 class ESPSensorData(BaseModel):
-    Occupancy: bool
     Speed: float
     Acceleration: float
-    Vibration: float
-    Intensity: float
-    Safety: float
-    MotorStatus: str
+    Vibration: int
+    Intensity: int
+    MotorStatus: int
+    Safety: int
+    OccupancyRaw: float
+    OccupancyBinary: int
 
 class PWACommand(BaseModel):
     device_id: str
@@ -463,6 +464,16 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
                 "success": True, 
                 "warning": "Device not registered. Call /startup endpoint first."
             }
+        else:
+            user_settings = {
+                "device_id": int(device_id), 
+                "vibration": data.Vibration,
+                "intensity": data.Intensity,
+                "motor_status": data.MotorStatus,
+            }
+            supabase.table("user_settings")\
+                .upsert(user_settings, on_conflict='id')\
+                .execute()
     except Exception as e:
         print(f"Error checking device existence: {e}")
     
@@ -536,6 +547,19 @@ def get_device(device_id: str):
     #     raise HTTPException(status_code=404, detail="Device not found")
     
     response = supabase.table("devices").select("*").eq("id", int(device_id)).execute()
+    
+    # echo
+    return response
+
+#User retrieves user settings
+@app.get("/devices/{device_id}/settings")
+def get_device(device_id: str):
+    """Get specific device data"""
+
+    # if device_id not in latest_data:
+    #     raise HTTPException(status_code=404, detail="Device not found")
+    
+    response = supabase.table("user_settings").select("*").eq("id", int(device_id)).execute()
     
     # echo
     return response
