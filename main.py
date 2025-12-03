@@ -560,7 +560,7 @@ def get_device(device_id: str):
     # if device_id not in latest_data:
     #     raise HTTPException(status_code=404, detail="Device not found")
     
-    response = supabase.table("user_settings").select("*").eq("id", int(device_id)).execute()
+    response = supabase.table("user_settings").select("*").eq("device_id", int(device_id)).execute()
     
     # echo
     return response
