@@ -433,7 +433,7 @@ def esp32_startup(device_id: str, data: ESPStartupData):
 
     
 @app.post("/esp32/{device_id}/sensors")
-async def esp32_sensors(device_id: str, data: ESPSensorData):
+async def esp32_sensors(device_id: str, data: ESPSensorData, startupDate: ESPStartupData):
     """ESP32 -> sends sensor readings"""
     global active_push_tasks
     
@@ -474,6 +474,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
             }
             add_safety = {
                 "id": int(device_id),
+                "name": startupDate.CustomName,
                 "safety": data.Safety,
             }
             supabase.table("user_settings")\
