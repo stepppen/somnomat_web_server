@@ -41,6 +41,7 @@ pending_commands = {}
 sleep_data = {} 
 aggregated_occupancy_binary = [] 
 occ_intervals = []
+device_metadata = {}
 
 default_metrics = {
     "consistency_score": 0,
@@ -415,6 +416,10 @@ def esp32_startup(device_id: str, data: ESPStartupData):
             "sd_free_storage": data.SDFreeStorage,
             "last_seen": datetime.now().isoformat()
         }
+        device_metadata[device_id] = {
+            "custom_name": data.CustomName,
+            # other startup data
+        }
         
         result_devices = supabase.table("devices")\
             .upsert(device_record, on_conflict='id')\
@@ -433,7 +438,7 @@ def esp32_startup(device_id: str, data: ESPStartupData):
 
     
 @app.post("/esp32/{device_id}/sensors")
-async def esp32_sensors(device_id: str, data: ESPSensorData, startupDate: ESPStartupData):
+async def esp32_sensors(device_id: str, data: ESPSensorData):
     """ESP32 -> sends sensor readings"""
     global active_push_tasks
     
@@ -474,7 +479,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData, startupDate: ESPSta
             }
             add_safety = {
                 "id": int(device_id),
-                "name": startupDate.CustomName,
+                "name": device_metadata[device_id]["custom_name"],
                 "safety": data.Safety,
             }
             supabase.table("user_settings")\
