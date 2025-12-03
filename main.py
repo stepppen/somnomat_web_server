@@ -39,7 +39,7 @@ supabase: Client = create_client(url, key)
 latest_data = {}  
 pending_commands = {} 
 sleep_data = {} 
-aggregated_occupancy = [] 
+aggregated_occupancy_binary = [] 
 occ_intervals = []
 
 default_metrics = {
@@ -73,6 +73,7 @@ class ESPSensorData(BaseModel):
     Intensity: int
     MotorStatus: int
     Safety: int
+    Occupancy: bool
     OccupancyRaw: float
     OccupancyBinary: int
 
@@ -90,9 +91,9 @@ sleep_cache = SleepMetricsCache()
 
 
 #aggregation function occupancy
-def aggregate_occupancy(data: bool):
-    aggregated_occupancy.append({
-        "occupied": data,
+def aggregate_occupancy_binary(data: int):
+    aggregated_occupancy_binary.append({
+        "occupancy_binary": data,
         "timestamp": datetime.now().isoformat()
         })
 
@@ -100,7 +101,7 @@ def summarize_minute(batch):
     """Return true if more than half are occ"""
     if not batch:
         return None
-    occupied_count = sum(1 for x in batch if x["occupied"])
+    occupied_count = sum(1 for x in batch if x["occupancy_binary"] == 1 )
     occupancy_value = occupied_count >= len(batch) / 2
     return occupancy_value
 
@@ -108,11 +109,11 @@ async def push_aggregated_data(device_id: str):
     """Runs every min"""
     while True:
         await asyncio.sleep(60)
-        if not aggregated_occupancy:
+        if not aggregated_occupancy_binary:
             continue
 
-        batch = aggregated_occupancy.copy()
-        aggregated_occupancy.clear()
+        batch = aggregated_occupancy_binary.copy()
+        aggregated_occupancy_binary.clear()
 
         # One bool for whole minute
         occupied = summarize_minute(batch)
@@ -131,7 +132,7 @@ async def push_aggregated_data(device_id: str):
             current_record = {
                 "device_id": int(device_id),
                 "created_at": datetime.now().isoformat(),
-                "occupied": occupied
+                "occupied": occupied,
             }
             supabase.table("raw_occupancy").insert(current_record).execute()
 
@@ -458,7 +459,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
             })
             
             #aggregate occ for when device gets registered
-            aggregate_occupancy(data.Occupancy)
+            aggregate_occupancy_binary(data.OccupancyBinary)
             
             return {
                 "success": True, 
@@ -493,7 +494,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
     })
 
     # Aggregate occupancy data
-    aggregate_occupancy(data.Occupancy)
+    aggregate_occupancy_binary(data.OccupancyBinary)
     
     # Start background task if not already running
     if device_id not in active_push_tasks or active_push_tasks[device_id].done():
