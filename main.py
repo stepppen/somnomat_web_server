@@ -473,7 +473,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
                 "motor_status": data.MotorStatus,
             }
             supabase.table("user_settings")\
-                .upsert(user_settings, on_conflict='id')\
+                .upsert(user_settings, on_conflict='device_id')\
                 .execute()
     except Exception as e:
         print(f"Error checking device existence: {e}")
