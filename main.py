@@ -772,6 +772,23 @@ def get_device(device_id: str):
     # echo
     return response
 
+#Check if device is still online via occupied timestamp
+@app.get("/devices/{device_id}/last_occupied")
+def get_device(device_id: str):
+    """Get most recent timestamp"""
+    try:
+        response = supabase.table("raw_occupancy")\
+            .select("*")\
+            .eq("device_id", int(device_id))\
+            .order('created_at', desc=True)\
+            .limit(1)\
+            .execute()
+        
+        return response
+    except Exception as e:
+        print(f"Error fetching data: {e}")
+    
+
 @app.post("/commands")
 def create_command(cmd: PWACommand):
     """create command for ESP32"""
