@@ -945,13 +945,13 @@ def update_user_settings(device_id: str, settings: UserSettingsUpdate, data: ESP
             "wake_up_time": settings.wake_up_time,
             "bed_time_tolerance": settings.bed_time_tolerance,
             "wake_up_tolerance": settings.wake_up_tolerance,
-            "vibration": data.Vibration,
-            "intensity": data.Intensity,
-            "motor_status": data.MotorStatus,
+            # "vibration": data.Vibration,
+            # "intensity": data.Intensity,
+            # "motor_status": data.MotorStatus,
             "updated_at": datetime.now(timezone.utc).astimezone().isoformat()
         }
         result = supabase.table("user_settings")\
-            .upsert(settings_record, on_conflict='device_id')\
+            .update(settings_record, on_conflict='device_id')\
             .execute()
         
         return {
