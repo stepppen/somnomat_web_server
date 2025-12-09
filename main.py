@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from typing import Optional, List, Dict, Literal
 from contextlib import asynccontextmanager
 import random
@@ -589,7 +589,7 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         "version_ota2": data.VersionOTA2,
         "sd_free_storage": data.SDFreeStorage,
         "mac": data.MAC,
-        "last_seen": datetime.now().isoformat()
+        "last_seen": datetime.now(timezone.utc).astimezone().isoformat()
     })
     
     try:
@@ -599,6 +599,7 @@ def esp32_startup(device_id: str, data: ESPStartupData):
             "status": data.Status,
             "temperature": data.Temperature,
             "mac": data.MAC,
+            "last_seen": datetime.now(timezone.utc).astimezone().isoformat()
         }
         firmware_record = {
             "device_id": int(device_id),  
@@ -607,7 +608,7 @@ def esp32_startup(device_id: str, data: ESPStartupData):
             "version_ota1": data.VersionOTA1,
             "version_ota2": data.VersionOTA2,
             "sd_free_storage": data.SDFreeStorage,
-            "last_seen": datetime.now().isoformat()
+            
         }
         device_metadata[device_id] = {
             "custom_name": data.CustomName,
@@ -652,7 +653,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
                 "intensity": data.Intensity,
                 "safety": data.Safety,
                 "motor_status": data.MotorStatus,
-                "last_seen": datetime.now().isoformat()
+                "last_seen": datetime.now(timezone.utc).astimezone().isoformat()
             })
             
             #aggregate occ for when device gets registered
@@ -695,7 +696,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
         "vibration": data.Vibration,
         "intensity": data.Intensity,
         "safety": data.Safety,
-        "last_seen": datetime.now().isoformat()
+        "last_seen": datetime.now(timezone.utc).astimezone().isoformat()
     })
 
     # Aggregate occupancy data
@@ -807,10 +808,7 @@ def get_sleep_summary(
     Parameters:
     - device_id: Device identifier
     - period: 'day', 'week', or 'month'
-    - date: Optional ISO date string. If not provided, uses today.
-            For 'day': returns data for that specific day
-            For 'week': returns data for the week containing that date
-            For 'month': returns data for the month containing that date
+    - date: if not provided, uses today.
     """
     
     # Parse target date
