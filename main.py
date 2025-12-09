@@ -923,7 +923,7 @@ def get_sleep_summary(
     }
 
 @app.post("/user-settings/{device_id}")
-def update_user_settings(device_id: str, settings: UserSettingsUpdate, data: ESPSensorData):
+def update_user_settings(device_id: str, settings: UserSettingsUpdate):
     """
     Update user sleep settings for a specific device
     
@@ -938,20 +938,27 @@ def update_user_settings(device_id: str, settings: UserSettingsUpdate, data: ESP
         if not device_result.data:
             raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
         
-        # Prepare settings record
-        settings_record = {
+        existing = supabase.table("user_settings") \
+            .select("vibration, intensity") \
+            .eq("device_id", device_id) \
+            .single() \
+            .execute()
+
+        # Start with existing values first
+        settings_record = existing.data or {}
+
+        # Now overwrite with your new fields
+        settings_record.update({
             "device_id": int(device_id),
             "bed_time": settings.bed_time,
             "wake_up_time": settings.wake_up_time,
             "bed_time_tolerance": settings.bed_time_tolerance,
             "wake_up_tolerance": settings.wake_up_tolerance,
-            # "vibration": data.Vibration,
-            # "intensity": data.Intensity,
-            # "motor_status": data.MotorStatus,
             "updated_at": datetime.now(timezone.utc).astimezone().isoformat()
-        }
-        result = supabase.table("user_settings")\
-            .update(settings_record, on_conflict='device_id')\
+        })
+
+        result = supabase.table("user_settings") \
+            .upsert(settings_record, on_conflict="device_id") \
             .execute()
         
         return {
