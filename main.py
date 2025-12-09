@@ -87,6 +87,28 @@ class SleepMetricsCache:
     def __init__(self):
         self.last_full_compute = None
         self.cached_intervals = []
+
+class UserSettingsUpdate(BaseModel):
+    bed_time: str
+    wake_up_time: str
+    bed_time_tolerance: int
+    wake_up_tolerance: int
+    
+    @field_validator('bed_time', 'wake_up_time')
+    @classmethod
+    def validate_time_format(cls, v):
+        try:
+            datetime.strptime(v, '%H:%M')
+            return v
+        except ValueError:
+            raise ValueError('Time must be in HH:MM format')
+    
+    @field_validator('bed_time_tolerance', 'wake_up_tolerance')
+    @classmethod
+    def validate_tolerance(cls, v):
+        if v < 0:
+            raise ValueError('Tolerance must be non-negative')
+        return v
         
 sleep_cache = SleepMetricsCache()
 
@@ -899,6 +921,52 @@ def get_sleep_summary(
             "intervals": intervals_response
         }
     }
+
+@app.post("/user-settings/{device_id}")
+def update_user_settings(device_id: str, settings: UserSettingsUpdate):
+    """
+    Update user sleep settings for a specific device
+    
+    Parameters:
+    - device_id: Device identifier
+    - settings: UserSettingsUpdate object containing bed_time, wake_up_time, and tolerances
+    """
+    try:
+        # Check if device exists
+        device_result = supabase.table("devices").select("id").eq("id", int(device_id)).execute()
+        
+        if not device_result.data:
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
+        
+        # Prepare settings record
+        settings_record = {
+            "device_id": int(device_id),
+            "bed_time": settings.bed_time,
+            "wake_up_time": settings.wake_up_time,
+            "bed_time_tolerance": settings.bed_time_tolerance,
+            "wake_up_tolerance": settings.wake_up_tolerance,
+            "updated_at": datetime.now(timezone.utc).astimezone().isoformat()
+        }
+        
+        # Upsert user settings
+        result = supabase.table("user_settings")\
+            .upsert(settings_record, on_conflict='device_id')\
+            .execute()
+        
+        return {
+            "success": True,
+            "message": f"Settings updated for device {device_id}",
+            "data": result.data[0] if result.data else settings_record
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating user settings: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update settings: {str(e)}")
+
+    
+
 # @app.get("/sleep/{device_id}/summary")
 # def get_sleep_summary(device_id: str):
 #     """Get full sleep summary for dashboard"""
