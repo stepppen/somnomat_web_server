@@ -960,7 +960,7 @@ def update_user_settings(device_id: str, settings: UserSettingsUpdate):
         result = supabase.table("user_settings") \
             .upsert(settings_record, on_conflict="device_id") \
             .execute()
-        
+        print(f"result: {result}")
         return {
             "success": True,
             "message": f"Settings updated for device {device_id}",
