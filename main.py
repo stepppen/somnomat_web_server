@@ -923,7 +923,7 @@ def get_sleep_summary(
     }
 
 @app.post("/user-settings/{device_id}")
-def update_user_settings(device_id: str, settings: UserSettingsUpdate):
+def update_user_settings(device_id: str, settings: UserSettingsUpdate, data: ESPSensorData):
     """
     Update user sleep settings for a specific device
     
@@ -945,10 +945,11 @@ def update_user_settings(device_id: str, settings: UserSettingsUpdate):
             "wake_up_time": settings.wake_up_time,
             "bed_time_tolerance": settings.bed_time_tolerance,
             "wake_up_tolerance": settings.wake_up_tolerance,
+            "vibration": data.Vibration,
+            "intensity": data.Intensity,
+            "motor_status": data.MotorStatus,
             "updated_at": datetime.now(timezone.utc).astimezone().isoformat()
         }
-        
-        # Upsert user settings
         result = supabase.table("user_settings")\
             .upsert(settings_record, on_conflict='device_id')\
             .execute()
