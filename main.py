@@ -241,43 +241,68 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
     # Total sleep duration
     total_sleep_min = sum(iv["duration_min"] for iv in intervals)
     
-    # Count nights
-    nights = set()
-    for iv in intervals:
+    # Group intervals by "sleep night" - intervals that belong to the same sleep session
+    # We'll group intervals that are close together (within a few hours)
+    sleep_sessions = []
+    current_session = []
+    
+    sorted_intervals = sorted(intervals, key=lambda x: x["start"] if isinstance(x["start"], datetime) else datetime.fromisoformat(str(x["start"]).replace("Z", "")))
+    
+    for iv in sorted_intervals:
         interval_start = iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", ""))
-        nights.add(interval_start.date())
-    nights_count = len(nights)
+        
+        if not current_session:
+            current_session.append(iv)
+        else:
+            last_interval = current_session[-1]
+            last_end = last_interval["end"] if isinstance(last_interval["end"], datetime) else datetime.fromisoformat(str(last_interval["end"]).replace("Z", ""))
+            
+            # If gap is more than 8 hours, it's a new sleep session
+            gap_hours = (interval_start - last_end).total_seconds() / 3600
+            if gap_hours > 8:
+                sleep_sessions.append(current_session)
+                current_session = [iv]
+            else:
+                current_session.append(iv)
+    
+    if current_session:
+        sleep_sessions.append(current_session)
+    
+    nights_count = len(sleep_sessions)
     
     # Bed activity (time motor was ON)
-    bed_activity_min = total_sleep_min  # Same as sleep duration for now
+    bed_activity_min = total_sleep_min
     
-    # Calculate awakenings (gaps between intervals on same night)
-    awakenings_by_night = {}
-    for iv in intervals:
-        interval_start = iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", ""))
-        night_key = interval_start.date()
-        if night_key not in awakenings_by_night:
-            awakenings_by_night[night_key] = []
-        awakenings_by_night[night_key].append(iv)
-    
+    # Calculate awakenings (gaps between intervals within same session)
     total_awakenings = 0
-    for night, night_intervals in awakenings_by_night.items():
-        awakenings = max(0, len(night_intervals) - 1)
+    for session in sleep_sessions:
+        awakenings = max(0, len(session) - 1)
         total_awakenings += awakenings
     
     avg_awakenings = total_awakenings / nights_count if nights_count > 0 else 0
     
-    # Bedtime consistency (using first interval of each night)
+    # Bedtime consistency (using first interval of each session)
     bedtimes_minutes = []
-    for night, night_intervals in awakenings_by_night.items():
-        sorted_intervals = sorted(night_intervals, key=lambda x: x["start"] if isinstance(x["start"], datetime) else datetime.fromisoformat(str(x["start"]).replace("Z", "")))
-        if sorted_intervals:
-            first_start = sorted_intervals[0]["start"] if isinstance(sorted_intervals[0]["start"], datetime) else datetime.fromisoformat(str(sorted_intervals[0]["start"]).replace("Z", ""))
+    waketimes_minutes = []
+    
+    for session in sleep_sessions:
+        if session:
+            # First interval start = bedtime
+            first_start = session[0]["start"] if isinstance(session[0]["start"], datetime) else datetime.fromisoformat(str(session[0]["start"]).replace("Z", ""))
+            
+            # Use circular time representation for bedtimes (handle midnight wraparound)
+            # Convert to minutes since midnight
             bedtime_min = first_start.hour * 60 + first_start.minute
             bedtimes_minutes.append(bedtime_min)
+            
+            # Last interval end = wake time
+            last_end = session[-1]["end"] if isinstance(session[-1]["end"], datetime) else datetime.fromisoformat(str(session[-1]["end"]).replace("Z", ""))
+            waketime_min = last_end.hour * 60 + last_end.minute
+            waketimes_minutes.append(waketime_min)
     
     # Circular standard deviation for bedtime consistency
     if len(bedtimes_minutes) >= 2:
+        # Use circular statistics for times that wrap around midnight
         rad = [m / (24 * 60) * 2 * math.pi for m in bedtimes_minutes]
         C = sum(math.cos(t) for t in rad) / len(rad)
         S = sum(math.sin(t) for t in rad) / len(rad)
@@ -294,45 +319,46 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
         consistency_sd = 0
         consistency_score = 100 if len(bedtimes_minutes) == 1 else 0
     
-    # Average bedtime and wake time
-    all_starts = [iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", "")) for iv in intervals]
-    all_ends = [iv["end"] if isinstance(iv["end"], datetime) else datetime.fromisoformat(str(iv["end"]).replace("Z", "")) for iv in intervals]
-    
-    # Get average bedtime (first interval start)
-    first_intervals_by_night = []
-    for night, night_intervals in awakenings_by_night.items():
-        sorted_intervals = sorted(night_intervals, key=lambda x: x["start"] if isinstance(x["start"], datetime) else datetime.fromisoformat(str(x["start"]).replace("Z", "")))
-        if sorted_intervals:
-            first_intervals_by_night.append(sorted_intervals[0]["start"] if isinstance(sorted_intervals[0]["start"], datetime) else datetime.fromisoformat(str(sorted_intervals[0]["start"]).replace("Z", "")))
-    
+    # Calculate average bedtime using circular mean
     avg_bedtime = None
-    if first_intervals_by_night:
-        avg_bedtime_minutes = sum(dt.hour * 60 + dt.minute for dt in first_intervals_by_night) / len(first_intervals_by_night)
-        avg_bedtime_hour = int(avg_bedtime_minutes // 60)
-        avg_bedtime_min = int(avg_bedtime_minutes % 60)
+    if bedtimes_minutes:
+        # Convert to radians
+        rad = [m / (24 * 60) * 2 * math.pi for m in bedtimes_minutes]
+        # Circular mean
+        C = sum(math.cos(t) for t in rad) / len(rad)
+        S = sum(math.sin(t) for t in rad) / len(rad)
+        mean_rad = math.atan2(S, C)
+        
+        # Convert back to minutes (handling negative values)
+        mean_minutes = (mean_rad / (2 * math.pi) * 24 * 60) % (24 * 60)
+        
+        avg_bedtime_hour = int(mean_minutes // 60)
+        avg_bedtime_min = int(mean_minutes % 60)
         avg_bedtime = f"{avg_bedtime_hour:02d}:{avg_bedtime_min:02d}"
     
-    # Get average wake time (last interval end)
-    last_intervals_by_night = []
-    for night, night_intervals in awakenings_by_night.items():
-        sorted_intervals = sorted(night_intervals, key=lambda x: x["end"] if isinstance(x["end"], datetime) else datetime.fromisoformat(str(x["end"]).replace("Z", "")))
-        if sorted_intervals:
-            last_intervals_by_night.append(sorted_intervals[-1]["end"] if isinstance(sorted_intervals[-1]["end"], datetime) else datetime.fromisoformat(str(sorted_intervals[-1]["end"]).replace("Z", "")))
-    
+    # Calculate average wake time using circular mean
     avg_wake_time = None
-    if last_intervals_by_night:
-        avg_wake_minutes = sum(dt.hour * 60 + dt.minute for dt in last_intervals_by_night) / len(last_intervals_by_night)
-        avg_wake_hour = int(avg_wake_minutes // 60)
-        avg_wake_min = int(avg_wake_minutes % 60)
+    if waketimes_minutes:
+        # Convert to radians
+        rad = [m / (24 * 60) * 2 * math.pi for m in waketimes_minutes]
+        # Circular mean
+        C = sum(math.cos(t) for t in rad) / len(rad)
+        S = sum(math.sin(t) for t in rad) / len(rad)
+        mean_rad = math.atan2(S, C)
+        
+        # Convert back to minutes (handling negative values)
+        mean_minutes = (mean_rad / (2 * math.pi) * 24 * 60) % (24 * 60)
+        
+        avg_wake_hour = int(mean_minutes // 60)
+        avg_wake_min = int(mean_minutes % 60)
         avg_wake_time = f"{avg_wake_hour:02d}:{avg_wake_min:02d}"
     
-    # Time in bed (from first start to last end each night)
+    # Time in bed (from first start to last end of each session)
     time_in_bed_total = 0
-    for night, night_intervals in awakenings_by_night.items():
-        sorted_intervals = sorted(night_intervals, key=lambda x: x["start"] if isinstance(x["start"], datetime) else datetime.fromisoformat(str(x["start"]).replace("Z", "")))
-        if sorted_intervals:
-            first_start = sorted_intervals[0]["start"] if isinstance(sorted_intervals[0]["start"], datetime) else datetime.fromisoformat(str(sorted_intervals[0]["start"]).replace("Z", ""))
-            last_end = sorted_intervals[-1]["end"] if isinstance(sorted_intervals[-1]["end"], datetime) else datetime.fromisoformat(str(sorted_intervals[-1]["end"]).replace("Z", ""))
+    for session in sleep_sessions:
+        if session:
+            first_start = session[0]["start"] if isinstance(session[0]["start"], datetime) else datetime.fromisoformat(str(session[0]["start"]).replace("Z", ""))
+            last_end = session[-1]["end"] if isinstance(session[-1]["end"], datetime) else datetime.fromisoformat(str(session[-1]["end"]).replace("Z", ""))
             time_in_bed_total += (last_end - first_start).total_seconds() / 60
     
     return {
