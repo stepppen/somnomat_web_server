@@ -246,9 +246,10 @@ def convert_to_cet(dt: datetime) -> datetime:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(ZoneInfo("Europe/Zurich"))
 
-def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime, end_date: datetime) -> Dict:
+def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime, end_date: datetime, period: str = "week") -> Dict:
     """
-    Compute comprehensive sleep metrics for a specific date range
+    Compute comprehensive sleep metrics for a specific date range.
+    Added 'period' arg to toggle bed_time and wake_up_time logic.
     """
     if not intervals:
         return {
@@ -270,7 +271,7 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
     # Total sleep duration
     total_sleep_min = sum(iv["duration_min"] for iv in intervals)
     
-    # Group intervals by "sleep night" - intervals that belong to the same sleep session
+    # Group intervals by "sleep night"
     sleep_sessions = []
     current_session = []
     
@@ -298,10 +299,10 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
     
     nights_count = len(sleep_sessions)
     
-    # Bed activity (time motor was ON)
+    # Bed activity
     bed_activity_min = total_sleep_min
     
-    # Calculate awakenings (gaps between intervals within same session)
+    # Calculate awakenings
     total_awakenings = 0
     for session in sleep_sessions:
         awakenings = max(0, len(session) - 1)
@@ -309,30 +310,26 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
     
     avg_awakenings = total_awakenings / nights_count if nights_count > 0 else 0
     
-    # Bedtime consistency (using first interval of each session)
+    # Gather Bedtimes and Wake times for aggregation
     bedtimes_minutes = []
     waketimes_minutes = []
     
     for session in sleep_sessions:
         if session:
-            # First interval start = bedtime (CONVERT TO CET!)
+            # Bedtime processing
             first_start = session[0]["start"] if isinstance(session[0]["start"], datetime) else datetime.fromisoformat(str(session[0]["start"]).replace("Z", ""))
             first_start_cet = convert_to_cet(first_start)
-            
-            # Use circular time representation for bedtimes (handle midnight wraparound)
-            # Convert to minutes since midnight IN CET
             bedtime_min = first_start_cet.hour * 60 + first_start_cet.minute
             bedtimes_minutes.append(bedtime_min)
             
-            # Last interval end = wake time (CONVERT TO CET!)
+            # Wake time processing
             last_end = session[-1]["end"] if isinstance(session[-1]["end"], datetime) else datetime.fromisoformat(str(session[-1]["end"]).replace("Z", ""))
             last_end_cet = convert_to_cet(last_end)
             waketime_min = last_end_cet.hour * 60 + last_end_cet.minute
             waketimes_minutes.append(waketime_min)
     
-    # Circular standard deviation for bedtime consistency
+    # --- CONSISTENCY SCORE ---
     if len(bedtimes_minutes) >= 2:
-        # Use circular statistics for times that wrap around midnight
         rad = [m / (24 * 60) * 2 * math.pi for m in bedtimes_minutes]
         C = sum(math.cos(t) for t in rad) / len(rad)
         S = sum(math.sin(t) for t in rad) / len(rad)
@@ -349,41 +346,57 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
         consistency_sd = 0
         consistency_score = 100 if len(bedtimes_minutes) == 1 else 0
     
-    # Calculate average bedtime using circular mean (IN CET!)
+    # --- BED TIME LOGIC ---
     avg_bedtime = None
-    if bedtimes_minutes:
-        # Convert to radians
-        rad = [m / (24 * 60) * 2 * math.pi for m in bedtimes_minutes]
-        # Circular mean
-        C = sum(math.cos(t) for t in rad) / len(rad)
-        S = sum(math.sin(t) for t in rad) / len(rad)
-        mean_rad = math.atan2(S, C)
-        
-        # Convert back to minutes (handling negative values)
-        mean_minutes = (mean_rad / (2 * math.pi) * 24 * 60) % (24 * 60)
-        
-        avg_bedtime_hour = int(mean_minutes // 60)
-        avg_bedtime_min = int(mean_minutes % 60)
-        avg_bedtime = f"{avg_bedtime_hour:02d}:{avg_bedtime_min:02d}"
     
-    # Calculate average wake time using circular mean (IN CET!)
+    if period == "day":
+        # DAY VIEW: Retrieve the exact start time of the FIRST interval
+        if sleep_sessions and sleep_sessions[0]:
+            first_interval_start = sleep_sessions[0][0]["start"]
+            
+            if isinstance(first_interval_start, str):
+                first_interval_start = datetime.fromisoformat(first_interval_start.replace("Z", ""))
+            
+            first_start_cet = convert_to_cet(first_interval_start)
+            avg_bedtime = f"{first_start_cet.hour:02d}:{first_start_cet.minute:02d}"
+    else:
+        # WEEK/MONTH VIEW: Calculate circular mean
+        if bedtimes_minutes:
+            rad = [m / (24 * 60) * 2 * math.pi for m in bedtimes_minutes]
+            C = sum(math.cos(t) for t in rad) / len(rad)
+            S = sum(math.sin(t) for t in rad) / len(rad)
+            mean_rad = math.atan2(S, C)
+            mean_minutes = (mean_rad / (2 * math.pi) * 24 * 60) % (24 * 60)
+            avg_bedtime_hour = int(mean_minutes // 60)
+            avg_bedtime_min = int(mean_minutes % 60)
+            avg_bedtime = f"{avg_bedtime_hour:02d}:{avg_bedtime_min:02d}"
+
+    # --- WAKE TIME LOGIC ---
     avg_wake_time = None
-    if waketimes_minutes:
-        # Convert to radians
-        rad = [m / (24 * 60) * 2 * math.pi for m in waketimes_minutes]
-        # Circular mean
-        C = sum(math.cos(t) for t in rad) / len(rad)
-        S = sum(math.sin(t) for t in rad) / len(rad)
-        mean_rad = math.atan2(S, C)
-        
-        # Convert back to minutes (handling negative values)
-        mean_minutes = (mean_rad / (2 * math.pi) * 24 * 60) % (24 * 60)
-        
-        avg_wake_hour = int(mean_minutes // 60)
-        avg_wake_min = int(mean_minutes % 60)
-        avg_wake_time = f"{avg_wake_hour:02d}:{avg_wake_min:02d}"
     
-    # Time in bed (from first start to last end of each session)
+    if period == "day":
+        # DAY VIEW: Retrieve the actual end time of the very last interval
+        if sleep_sessions and sleep_sessions[-1]:
+            last_interval_end = sleep_sessions[-1][-1]["end"]
+            
+            if isinstance(last_interval_end, str):
+                last_interval_end = datetime.fromisoformat(last_interval_end.replace("Z", ""))
+            
+            last_end_cet = convert_to_cet(last_interval_end)
+            avg_wake_time = f"{last_end_cet.hour:02d}:{last_end_cet.minute:02d}"
+    else:
+        # WEEK/MONTH VIEW: Calculate circular mean
+        if waketimes_minutes:
+            rad = [m / (24 * 60) * 2 * math.pi for m in waketimes_minutes]
+            C = sum(math.cos(t) for t in rad) / len(rad)
+            S = sum(math.sin(t) for t in rad) / len(rad)
+            mean_rad = math.atan2(S, C)
+            mean_minutes = (mean_rad / (2 * math.pi) * 24 * 60) % (24 * 60)
+            avg_wake_hour = int(mean_minutes // 60)
+            avg_wake_min = int(mean_minutes % 60)
+            avg_wake_time = f"{avg_wake_hour:02d}:{avg_wake_min:02d}"
+    
+    # Time in bed
     time_in_bed_total = 0
     for session in sleep_sessions:
         if session:
@@ -400,8 +413,8 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
         "consistency_sd_minutes": round(consistency_sd, 2),
         "total_intervals": len(intervals),
         "avg_awakenings": round(avg_awakenings, 2),
-        "wake_up_time": avg_wake_time,  # NOW IN CET!
-        "bed_time": avg_bedtime,  # NOW IN CET!
+        "wake_up_time": avg_wake_time,
+        "bed_time": avg_bedtime,
         "time_in_bed_min": round(time_in_bed_total, 2),
         "time_in_bed_hours": round(time_in_bed_total / 60, 2),
         "nights_count": nights_count
@@ -707,7 +720,6 @@ def esp32_startup(device_id: str, data: ESPStartupData):
         print(f"err upserting device {device_id}: {e}")
         return {"success": False, "message": f"Failed to register device: {str(e)}", "device_id": device_id}
 
-    
 @app.post("/esp32/{device_id}/sensors")
 async def esp32_sensors(device_id: str, data: ESPSensorData):
     """ESP32 -> sends sensor readings"""
@@ -785,6 +797,7 @@ async def esp32_sensors(device_id: str, data: ESPSensorData):
         active_push_tasks[device_id] = asyncio.create_task(push_aggregated_data(device_id))
     
     return {"success": True}
+    
 
 @app.get("/esp32/{device_id}/poll")
 def esp32_poll(device_id: str):
@@ -1093,7 +1106,7 @@ async def get_sleep_summary(
         print(f"Filtered to {len(filtered_intervals)} intervals within range")
         
         # Compute metrics for this range
-        metrics = compute_sleep_metrics_for_range(filtered_intervals, start_date, end_date)
+        metrics = compute_sleep_metrics_for_range(filtered_intervals, start_date, end_date, period=period)
         
         # Prepare intervals for response
         intervals_response = []
