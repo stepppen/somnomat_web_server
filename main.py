@@ -4,6 +4,7 @@ from pydantic import BaseModel, field_validator
 from datetime import datetime, timedelta, time, timezone
 from typing import Optional, List, Dict, Literal
 from contextlib import asynccontextmanager
+from zoneinfo import ZoneInfo
 import random
 import os
 from dotenv import load_dotenv
@@ -217,6 +218,12 @@ def filter_intervals_by_date_range(intervals: List[Dict], start_date: datetime, 
     
     return filtered
 
+def convert_to_cet(dt: datetime) -> datetime:
+    """Convert a datetime to CET/CEST timezone"""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ZoneInfo("Europe/Zurich"))
+
 def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime, end_date: datetime) -> Dict:
     """
     Compute comprehensive sleep metrics for a specific date range
@@ -242,7 +249,6 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
     total_sleep_min = sum(iv["duration_min"] for iv in intervals)
     
     # Group intervals by "sleep night" - intervals that belong to the same sleep session
-    # We'll group intervals that are close together (within a few hours)
     sleep_sessions = []
     current_session = []
     
@@ -287,17 +293,19 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
     
     for session in sleep_sessions:
         if session:
-            # First interval start = bedtime
+            # First interval start = bedtime (CONVERT TO CET!)
             first_start = session[0]["start"] if isinstance(session[0]["start"], datetime) else datetime.fromisoformat(str(session[0]["start"]).replace("Z", ""))
+            first_start_cet = convert_to_cet(first_start)
             
             # Use circular time representation for bedtimes (handle midnight wraparound)
-            # Convert to minutes since midnight
-            bedtime_min = first_start.hour * 60 + first_start.minute
+            # Convert to minutes since midnight IN CET
+            bedtime_min = first_start_cet.hour * 60 + first_start_cet.minute
             bedtimes_minutes.append(bedtime_min)
             
-            # Last interval end = wake time
+            # Last interval end = wake time (CONVERT TO CET!)
             last_end = session[-1]["end"] if isinstance(session[-1]["end"], datetime) else datetime.fromisoformat(str(session[-1]["end"]).replace("Z", ""))
-            waketime_min = last_end.hour * 60 + last_end.minute
+            last_end_cet = convert_to_cet(last_end)
+            waketime_min = last_end_cet.hour * 60 + last_end_cet.minute
             waketimes_minutes.append(waketime_min)
     
     # Circular standard deviation for bedtime consistency
@@ -319,7 +327,7 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
         consistency_sd = 0
         consistency_score = 100 if len(bedtimes_minutes) == 1 else 0
     
-    # Calculate average bedtime using circular mean
+    # Calculate average bedtime using circular mean (IN CET!)
     avg_bedtime = None
     if bedtimes_minutes:
         # Convert to radians
@@ -336,7 +344,7 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
         avg_bedtime_min = int(mean_minutes % 60)
         avg_bedtime = f"{avg_bedtime_hour:02d}:{avg_bedtime_min:02d}"
     
-    # Calculate average wake time using circular mean
+    # Calculate average wake time using circular mean (IN CET!)
     avg_wake_time = None
     if waketimes_minutes:
         # Convert to radians
@@ -370,8 +378,8 @@ def compute_sleep_metrics_for_range(intervals: List[Dict], start_date: datetime,
         "consistency_sd_minutes": round(consistency_sd, 2),
         "total_intervals": len(intervals),
         "avg_awakenings": round(avg_awakenings, 2),
-        "wake_up_time": avg_wake_time,
-        "bed_time": avg_bedtime,
+        "wake_up_time": avg_wake_time,  # NOW IN CET!
+        "bed_time": avg_bedtime,  # NOW IN CET!
         "time_in_bed_min": round(time_in_bed_total, 2),
         "time_in_bed_hours": round(time_in_bed_total / 60, 2),
         "nights_count": nights_count
