@@ -839,7 +839,7 @@ def get_device(device_id: str):
 
 #User retrieves user settings
 @app.get("/devices/{device_id}/settings")
-def get_device(device_id: str):
+def get_device_settings(device_id: str):
     """Get device settings"""
 
     # if device_id not in latest_data:
@@ -852,7 +852,7 @@ def get_device(device_id: str):
 
 #Check if device is still online via occupied timestamp
 @app.get("/devices/{device_id}/last_occupied")
-def get_device(device_id: str):
+def get_device_last_occupied(device_id: str):
     """Get most recent timestamp"""
     try:
         response = supabase.table("raw_occupancy")\
@@ -888,6 +888,33 @@ def create_command(cmd: PWACommand):
         "message": f"Command '{cmd.command}' queued for {cmd.device_id}"
     }
 
+@app.post("/user-settings/{device_id}")
+async def update_user_settings(device_id: str, settings: UserSettingsUpdate):
+    """
+    Update user settings (Bed time, Wake up time, Tolerances)
+    """
+    try:
+        # Prepare the data for Supabase
+        update_data = {
+            "device_id": int(device_id),
+            "bed_time": settings.bed_time,
+            "wake_up_time": settings.wake_up_time,
+            "bed_time_tolerance": settings.bed_time_tolerance,
+            "wake_up_tolerance": settings.wake_up_tolerance,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # Perform the Upsert
+        # Since we fixed the Unique Constraint earlier, this will now work perfectly.
+        response = supabase.table("user_settings")\
+            .upsert(update_data, on_conflict="device_id")\
+            .execute()
+            
+        return {"success": True, "data": response.data}
+        
+    except Exception as e:
+        print(f"Error updating settings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/user-settings/{device_id}")
 async def get_user_settings(device_id: str):
