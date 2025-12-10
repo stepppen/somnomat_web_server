@@ -839,7 +839,8 @@ def create_command(cmd: PWACommand):
 def get_sleep_summary(
     device_id: str,
     period: Literal["day", "week", "month"] = Query(default="week"),
-    date: Optional[str] = Query(default=None, description="ISO date string (YYYY-MM-DD)")
+    date: Optional[str] = Query(default=None, description="ISO date string (YYYY-MM-DD)"),
+    sleep_boundary_hour: Optional[int] = Query(default=None, description="Hour of day where sleep day starts (0-23)")
 ):
     """
     Get sleep summary for a specific period (day/week/month)
@@ -848,6 +849,8 @@ def get_sleep_summary(
     - device_id: Device identifier
     - period: 'day', 'week', or 'month'
     - date: if not provided, uses today.
+    - sleep_boundary_hour: Hour that defines the start of a "sleep day" (e.g., 14 means 2 PM).
+                           If None, uses standard calendar day (00:00-23:59)
     """
     
     # Parse target date
@@ -859,24 +862,52 @@ def get_sleep_summary(
     else:
         target_date = datetime.now()
     
-    # Calculate date range based on period
-    if period == "day":
-        start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = start_date + timedelta(days=1) - timedelta(microseconds=1)
-    elif period == "week":
-        # Week starts on Monday
-        days_since_monday = target_date.weekday()
-        start_date = (target_date - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = start_date + timedelta(days=7) - timedelta(microseconds=1)
-    elif period == "month":
-        start_date = target_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        # Get last day of month
-        if target_date.month == 12:
-            end_date = target_date.replace(year=target_date.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
-        else:
-            end_date = target_date.replace(month=target_date.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+    # Calculate date range based on period and sleep boundary
+    if sleep_boundary_hour is not None:
+        # Use sleep-centric day boundaries
+        if period == "day":
+            start_date = target_date.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
+            end_date = start_date + timedelta(days=1) - timedelta(microseconds=1)
+            
+        elif period == "week":
+            # Week starts on Monday at sleep_boundary_hour
+            days_since_monday = target_date.weekday()
+            week_start = target_date - timedelta(days=days_since_monday)
+            start_date = week_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
+            end_date = start_date + timedelta(days=7) - timedelta(microseconds=1)
+            
+        elif period == "month":
+            # Month starts on 1st at sleep_boundary_hour
+            month_start = target_date.replace(day=1)
+            start_date = month_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
+            
+            # Last day of month at sleep_boundary_hour
+            if month_start.month == 12:
+                next_month = month_start.replace(year=month_start.year + 1, month=1)
+            else:
+                next_month = month_start.replace(month=month_start.month + 1)
+            end_date = next_month.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
     else:
-        raise HTTPException(status_code=400, detail="Invalid period. Must be 'day', 'week', or 'month'")
+        # Use standard calendar day boundaries (00:00-23:59)
+        if period == "day":
+            start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = start_date + timedelta(days=1) - timedelta(microseconds=1)
+            
+        elif period == "week":
+            # Week starts on Monday
+            days_since_monday = target_date.weekday()
+            start_date = (target_date - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = start_date + timedelta(days=7) - timedelta(microseconds=1)
+            
+        elif period == "month":
+            start_date = target_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            # Get last day of month
+            if target_date.month == 12:
+                end_date = target_date.replace(year=target_date.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+            else:
+                end_date = target_date.replace(month=target_date.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid period. Must be 'day', 'week', or 'month'")
     
     # Fetch occupancy data from database
     try:
@@ -916,6 +947,7 @@ def get_sleep_summary(
         "period": period,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
+        "sleep_boundary_hour": sleep_boundary_hour,
         "summary": {
             **metrics,
             "intervals": intervals_response
