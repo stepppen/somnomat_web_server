@@ -143,19 +143,19 @@ async def push_aggregated_data(device_id: str):
         occupied = summarize_minute(batch)
 
         # Check if device exists before computing metrics
-        try:
-            result = supabase.table("devices").select("id").eq("id", int(device_id)).execute()
-            if not result.data:
-                print(f"Device {device_id} not registered. Skipping metric computation.")
-                continue
-        except Exception as e:
-            print(f"Error checking device in push_aggregated_data: {e}")
-            continue
+        # try:
+        #     result = supabase.table("devices").select("id").eq("id", int(device_id)).execute()
+        #     if not result.data:
+        #         print(f"Device {device_id} not registered. Skipping metric computation.")
+        #         continue
+        # except Exception as e:
+        #     print(f"Error checking device in push_aggregated_data: {e}")
+        #     continue
 
         try:
             current_record = {
                 "device_id": int(device_id),
-                "created_at": datetime.now().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "occupied": occupied,
             }
             supabase.table("raw_occupancy").insert(current_record).execute()
@@ -165,10 +165,14 @@ async def push_aggregated_data(device_id: str):
             return default_metrics
 
 def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
-    """Convert boolean occupancy -> continuous intervals"""
+    """
+    bools occupancy -> continuous intervals.
+    Fixed to handle UTC strings from Supabase robustly.
+    """
     if not rows:
         return []
     
+    # Sort by created_at
     samples = sorted(rows, key=lambda x: x["created_at"]) 
     MIN_SEG_SEC = 120 
     
@@ -178,7 +182,19 @@ def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
     last_timestamp = None
     
     for sample in samples:
-        timestamp = datetime.fromisoformat(sample["created_at"].replace("Z", "")) 
+        # Robust UTC timestamp parsing
+        ts_str = sample["created_at"]
+        try:
+            # Replace Z with +00:00 to ensure Python reads it as UTC
+            timestamp = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        except ValueError:
+            # Fallback
+            timestamp = datetime.fromisoformat(ts_str)
+            
+        # Ensure it is timezone aware (UTC)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+            
         occupied = sample.get("occupied", False)
 
         if occupied and not in_occ:
@@ -186,22 +202,27 @@ def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
             current_start = timestamp
         elif not occupied and in_occ:
             in_occ = False
-            if last_timestamp and (last_timestamp - current_start).total_seconds() >= MIN_SEG_SEC:
-                intervals.append({
-                    "start": current_start,
-                    "end": last_timestamp,
-                    "duration_min": (last_timestamp - current_start).total_seconds() / 60
-                })
+            # Check duration
+            if current_start and last_timestamp:
+                duration_sec = (last_timestamp - current_start).total_seconds()
+                if duration_sec >= MIN_SEG_SEC:
+                    intervals.append({
+                        "start": current_start,
+                        "end": last_timestamp,
+                        "duration_min": duration_sec / 60
+                    })
             current_start = None
         
         last_timestamp = timestamp
     
+    # Handle the final interval (e.g., if user is still in bed when query runs)
     if in_occ and current_start and last_timestamp:
-        if (last_timestamp - current_start).total_seconds() >= MIN_SEG_SEC:
+        duration_sec = (last_timestamp - current_start).total_seconds()
+        if duration_sec >= MIN_SEG_SEC:
             intervals.append({
                 "start": current_start,
                 "end": last_timestamp,
-                "duration_min": (last_timestamp - current_start).total_seconds() / 60
+                "duration_min": duration_sec / 60
             })
     
     return intervals
