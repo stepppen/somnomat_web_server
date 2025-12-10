@@ -859,14 +859,12 @@ def create_command(cmd: PWACommand):
     }
 
 
-
-# 1. GET user settings endpoint
 @app.get("/user-settings/{device_id}")
 async def get_user_settings(device_id: str):
     """Get user settings for a device"""
     try:
         print(f"Fetching user settings for device {device_id}")
-        response = supabase.table("device_settings")\
+        response = supabase.table("user_settings")\
             .select("*")\
             .eq("device_id", int(device_id))\
             .execute()
@@ -880,7 +878,6 @@ async def get_user_settings(device_id: str):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-# 2. Updated sleep summary endpoint
 @app.get("/sleep/{device_id}/summary")
 async def get_sleep_summary(
     device_id: str,
@@ -895,14 +892,17 @@ async def get_sleep_summary(
         print(f"\n=== Sleep Summary Request ===")
         print(f"Device: {device_id}, Period: {period}, Date: {date}, Boundary: {sleep_boundary_hour}")
         
-        # Parse target date
+        # Parse target date - make it timezone aware (UTC)
         if date:
             try:
                 target_date = datetime.fromisoformat(date)
+                # Make timezone aware if it isn't already
+                if target_date.tzinfo is None:
+                    target_date = target_date.replace(tzinfo=timezone.utc)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
         else:
-            target_date = datetime.now()
+            target_date = datetime.now(timezone.utc)
         
         # Calculate date range based on period and sleep boundary
         if sleep_boundary_hour is not None:
@@ -944,7 +944,8 @@ async def get_sleep_summary(
                 
             elif period == "week":
                 days_since_monday = target_date.weekday()
-                start_date = (target_date - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                week_start = target_date - timedelta(days=days_since_monday)
+                start_date = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
                 end_date = start_date + timedelta(days=7) - timedelta(microseconds=1)
                 fetch_start_date = start_date
                 fetch_end_date = end_date + timedelta(microseconds=1)
@@ -980,10 +981,17 @@ async def get_sleep_summary(
         print(f"Built {len(all_intervals)} total intervals")
         
         # Filter intervals that overlap with our target date range
+        # Make sure interval datetimes are timezone-aware for comparison
         filtered_intervals = []
         for iv in all_intervals:
-            interval_start = iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", "").replace("+00:00", ""))
-            interval_end = iv["end"] if isinstance(iv["end"], datetime) else datetime.fromisoformat(str(iv["end"]).replace("Z", "").replace("+00:00", ""))
+            interval_start = iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", "+00:00"))
+            interval_end = iv["end"] if isinstance(iv["end"], datetime) else datetime.fromisoformat(str(iv["end"]).replace("Z", "+00:00"))
+            
+            # Ensure timezone awareness
+            if interval_start.tzinfo is None:
+                interval_start = interval_start.replace(tzinfo=timezone.utc)
+            if interval_end.tzinfo is None:
+                interval_end = interval_end.replace(tzinfo=timezone.utc)
             
             # Include interval if it overlaps with [start_date, end_date]
             if interval_end >= start_date and interval_start <= end_date:
@@ -1024,8 +1032,9 @@ async def get_sleep_summary(
         print(f"ERROR in get_sleep_summary: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")  
-
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    
+    
 # @app.get("/sleep/{device_id}/summary")
 # def get_sleep_summary(device_id: str):
 #     """Get full sleep summary for dashboard"""
