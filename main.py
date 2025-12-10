@@ -860,9 +860,29 @@ def create_command(cmd: PWACommand):
 
 
 
-#where the aggregated values are fetched from func 
+# 1. GET user settings endpoint
+@app.get("/user-settings/{device_id}")
+async def get_user_settings(device_id: str):
+    """Get user settings for a device"""
+    try:
+        print(f"Fetching user settings for device {device_id}")
+        response = supabase.table("device_settings")\
+            .select("*")\
+            .eq("device_id", int(device_id))\
+            .execute()
+        
+        print(f"User settings query result: {response.data}")
+        return {"data": response.data, "count": len(response.data) if response.data else 0}
+    except Exception as e:
+        print(f"Error fetching user settings: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+# 2. Updated sleep summary endpoint
 @app.get("/sleep/{device_id}/summary")
-def get_sleep_summary(
+async def get_sleep_summary(
     device_id: str,
     period: Literal["day", "week", "month"] = Query(default="week"),
     date: Optional[str] = Query(default=None, description="ISO date string (YYYY-MM-DD)"),
@@ -871,180 +891,140 @@ def get_sleep_summary(
     """
     Get sleep summary for a specific period (day/week/month)
     """
-    
-    # Parse target date
-    if date:
-        try:
-            target_date = datetime.fromisoformat(date)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-    else:
-        target_date = datetime.now()
-    
-    # Calculate date range based on period and sleep boundary
-    if sleep_boundary_hour is not None:
-        # Use sleep-centric day boundaries
-        if period == "day":
-            start_date = target_date.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
-            end_date = start_date + timedelta(days=1)
-            
-            # Expand fetch range to capture sleep from previous day
-            fetch_start_date = start_date - timedelta(hours=24)
-            fetch_end_date = end_date
-            
-        elif period == "week":
-            days_since_monday = target_date.weekday()
-            week_start = target_date - timedelta(days=days_since_monday)
-            start_date = week_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
-            end_date = start_date + timedelta(days=7)
-            
-            fetch_start_date = start_date - timedelta(hours=24)
-            fetch_end_date = end_date
-            
-        elif period == "month":
-            month_start = target_date.replace(day=1)
-            start_date = month_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
-            
-            if month_start.month == 12:
-                next_month = month_start.replace(year=month_start.year + 1, month=1)
-            else:
-                next_month = month_start.replace(month=month_start.month + 1)
-            end_date = next_month.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
-            
-            fetch_start_date = start_date - timedelta(hours=24)
-            fetch_end_date = end_date
-        else:
-            raise HTTPException(status_code=400, detail="Invalid period")
-    else:
-        # Use standard calendar day boundaries (00:00-23:59)
-        if period == "day":
-            start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = start_date + timedelta(days=1)
-            fetch_start_date = start_date
-            fetch_end_date = end_date
-            
-        elif period == "week":
-            days_since_monday = target_date.weekday()
-            start_date = (target_date - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = start_date + timedelta(days=7)
-            fetch_start_date = start_date
-            fetch_end_date = end_date
-            
-        elif period == "month":
-            start_date = target_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            if target_date.month == 12:
-                end_date = target_date.replace(year=target_date.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-            else:
-                end_date = target_date.replace(month=target_date.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
-            fetch_start_date = start_date
-            fetch_end_date = end_date
-        else:
-            raise HTTPException(status_code=400, detail="Invalid period. Must be 'day', 'week', or 'month'")
-    
-    # Fetch occupancy data from database using expanded range
     try:
+        print(f"\n=== Sleep Summary Request ===")
+        print(f"Device: {device_id}, Period: {period}, Date: {date}, Boundary: {sleep_boundary_hour}")
+        
+        # Parse target date
+        if date:
+            try:
+                target_date = datetime.fromisoformat(date)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        else:
+            target_date = datetime.now()
+        
+        # Calculate date range based on period and sleep boundary
+        if sleep_boundary_hour is not None:
+            # Use sleep-centric day boundaries
+            if period == "day":
+                start_date = target_date.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
+                end_date = start_date + timedelta(days=1)
+                # Expand fetch range to capture sleep from previous day
+                fetch_start_date = start_date - timedelta(hours=24)
+                fetch_end_date = end_date
+                
+            elif period == "week":
+                days_since_monday = target_date.weekday()
+                week_start = target_date - timedelta(days=days_since_monday)
+                start_date = week_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
+                end_date = start_date + timedelta(days=7)
+                fetch_start_date = start_date - timedelta(hours=24)
+                fetch_end_date = end_date
+                
+            elif period == "month":
+                month_start = target_date.replace(day=1)
+                start_date = month_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
+                if month_start.month == 12:
+                    next_month = month_start.replace(year=month_start.year + 1, month=1)
+                else:
+                    next_month = month_start.replace(month=month_start.month + 1)
+                end_date = next_month.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
+                fetch_start_date = start_date - timedelta(hours=24)
+                fetch_end_date = end_date
+            else:
+                raise HTTPException(status_code=400, detail="Invalid period")
+        else:
+            # Use standard calendar day boundaries (00:00-23:59)
+            if period == "day":
+                start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = start_date + timedelta(days=1) - timedelta(microseconds=1)
+                fetch_start_date = start_date
+                fetch_end_date = end_date + timedelta(microseconds=1)
+                
+            elif period == "week":
+                days_since_monday = target_date.weekday()
+                start_date = (target_date - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+                end_date = start_date + timedelta(days=7) - timedelta(microseconds=1)
+                fetch_start_date = start_date
+                fetch_end_date = end_date + timedelta(microseconds=1)
+                
+            elif period == "month":
+                start_date = target_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                if target_date.month == 12:
+                    end_date = target_date.replace(year=target_date.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+                else:
+                    end_date = target_date.replace(month=target_date.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+                fetch_start_date = start_date
+                fetch_end_date = end_date + timedelta(microseconds=1)
+            else:
+                raise HTTPException(status_code=400, detail="Invalid period")
+        
+        print(f"Fetch range: {fetch_start_date} to {fetch_end_date}")
+        print(f"Logical range: {start_date} to {end_date}")
+        
+        # Fetch occupancy data from database
         response = supabase.table("raw_occupancy")\
             .select("*")\
             .eq("device_id", int(device_id))\
             .gte("created_at", fetch_start_date.isoformat())\
-            .lt("created_at", fetch_end_date.isoformat())\
+            .lte("created_at", fetch_end_date.isoformat())\
             .order("created_at")\
             .execute()
         
         occupancy_rows = response.data
-    except Exception as e:
-        print(f"Error fetching occupancy data: {e}")
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-    
-    # Build intervals from occupancy data
-    all_intervals = build_occupancy_intervals(occupancy_rows)
-    
-    # Filter intervals that overlap with our target date range
-    filtered_intervals = []
-    for iv in all_intervals:
-        interval_start = iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", ""))
-        interval_end = iv["end"] if isinstance(iv["end"], datetime) else datetime.fromisoformat(str(iv["end"]).replace("Z", ""))
+        print(f"Fetched {len(occupancy_rows) if occupancy_rows else 0} occupancy rows")
         
-        # Include interval if it overlaps with [start_date, end_date)
-        if interval_end >= start_date and interval_start < end_date:
-            filtered_intervals.append(iv)
-    
-    # Compute metrics for this range
-    metrics = compute_sleep_metrics_for_range(filtered_intervals, start_date, end_date)
-    
-    # Prepare intervals for response
-    intervals_response = []
-    for iv in filtered_intervals:
-        intervals_response.append({
-            "start": iv["start"].isoformat() if isinstance(iv["start"], datetime) else iv["start"],
-            "end": iv["end"].isoformat() if isinstance(iv["end"], datetime) else iv["end"],
-            "duration_min": iv["duration_min"]
-        })
-    
-    return {
-        "device_id": device_id,
-        "period": period,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "sleep_boundary_hour": sleep_boundary_hour,
-        "summary": {
-            **metrics,
-            "intervals": intervals_response
+        # Build intervals from occupancy data
+        all_intervals = build_occupancy_intervals(occupancy_rows)
+        print(f"Built {len(all_intervals)} total intervals")
+        
+        # Filter intervals that overlap with our target date range
+        filtered_intervals = []
+        for iv in all_intervals:
+            interval_start = iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", "").replace("+00:00", ""))
+            interval_end = iv["end"] if isinstance(iv["end"], datetime) else datetime.fromisoformat(str(iv["end"]).replace("Z", "").replace("+00:00", ""))
+            
+            # Include interval if it overlaps with [start_date, end_date]
+            if interval_end >= start_date and interval_start <= end_date:
+                filtered_intervals.append(iv)
+        
+        print(f"Filtered to {len(filtered_intervals)} intervals within range")
+        
+        # Compute metrics for this range
+        metrics = compute_sleep_metrics_for_range(filtered_intervals, start_date, end_date)
+        
+        # Prepare intervals for response
+        intervals_response = []
+        for iv in filtered_intervals:
+            intervals_response.append({
+                "start": iv["start"].isoformat() if isinstance(iv["start"], datetime) else str(iv["start"]),
+                "end": iv["end"].isoformat() if isinstance(iv["end"], datetime) else str(iv["end"]),
+                "duration_min": iv["duration_min"]
+            })
+        
+        result = {
+            "device_id": device_id,
+            "period": period,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "sleep_boundary_hour": sleep_boundary_hour,
+            "summary": {
+                **metrics,
+                "intervals": intervals_response
+            }
         }
-    }
-
-@app.post("/user-settings/{device_id}")
-def update_user_settings(device_id: str, settings: UserSettingsUpdate):
-    """
-    Update user sleep settings for a specific device
-    
-    Parameters:
-    - device_id: Device identifier
-    - settings: UserSettingsUpdate object containing bed_time, wake_up_time, and tolerances
-    """
-    try:
-        # Check if device exists
-        device_result = supabase.table("devices").select("id").eq("id", int(device_id)).execute()
         
-        if not device_result.data:
-            raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
-        
-        existing = supabase.table("user_settings") \
-            .select("vibration, intensity") \
-            .eq("device_id", device_id) \
-            .single() \
-            .execute()
-
-        # Start with existing values first
-        settings_record = existing.data or {}
-
-        # Now overwrite with your new fields
-        settings_record.update({
-            "device_id": int(device_id),
-            "bed_time": settings.bed_time,
-            "wake_up_time": settings.wake_up_time,
-            "bed_time_tolerance": settings.bed_time_tolerance,
-            "wake_up_tolerance": settings.wake_up_tolerance,
-            "updated_at": datetime.now(timezone.utc).astimezone().isoformat()
-        })
-
-        result = supabase.table("user_settings") \
-            .upsert(settings_record, on_conflict="device_id") \
-            .execute()
-        print(f"result: {result}")
-        return {
-            "success": True,
-            "message": f"Settings updated for device {device_id}",
-            "data": result.data[0] if result.data else settings_record
-        }
+        print(f"Returning summary with {len(intervals_response)} intervals")
+        return result
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error updating user settings: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update settings: {str(e)}")
-
-    
+        print(f"ERROR in get_sleep_summary: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")  
 
 # @app.get("/sleep/{device_id}/summary")
 # def get_sleep_summary(device_id: str):
