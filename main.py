@@ -870,13 +870,6 @@ def get_sleep_summary(
 ):
     """
     Get sleep summary for a specific period (day/week/month)
-    
-    Parameters:
-    - device_id: Device identifier
-    - period: 'day', 'week', or 'month'
-    - date: if not provided, uses today.
-    - sleep_boundary_hour: Hour that defines the start of a "sleep day" (e.g., 14 means 2 PM).
-                           If None, uses standard calendar day (00:00-23:59)
     """
     
     # Parse target date
@@ -891,66 +884,58 @@ def get_sleep_summary(
     # Calculate date range based on period and sleep boundary
     if sleep_boundary_hour is not None:
         # Use sleep-centric day boundaries
-        # IMPORTANT: We need to fetch data from BEFORE the boundary to capture sleep that spans midnight
-        
         if period == "day":
             start_date = target_date.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
-            end_date = start_date + timedelta(days=1) - timedelta(microseconds=1)
+            end_date = start_date + timedelta(days=1)
             
-            # Expand the fetch range to include potential sleep data from before the boundary
-            # Fetch from 24 hours before start_date to capture sleep that may have started the previous evening
+            # Expand fetch range to capture sleep from previous day
             fetch_start_date = start_date - timedelta(hours=24)
             fetch_end_date = end_date
             
         elif period == "week":
-            # Week starts on Monday at sleep_boundary_hour
             days_since_monday = target_date.weekday()
             week_start = target_date - timedelta(days=days_since_monday)
             start_date = week_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
-            end_date = start_date + timedelta(days=7) - timedelta(microseconds=1)
+            end_date = start_date + timedelta(days=7)
             
-            # Fetch from 24 hours before start to capture sleep from previous day
             fetch_start_date = start_date - timedelta(hours=24)
             fetch_end_date = end_date
             
         elif period == "month":
-            # Month starts on 1st at sleep_boundary_hour
             month_start = target_date.replace(day=1)
             start_date = month_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
             
-            # Last day of month at sleep_boundary_hour
             if month_start.month == 12:
                 next_month = month_start.replace(year=month_start.year + 1, month=1)
             else:
                 next_month = month_start.replace(month=month_start.month + 1)
-            end_date = next_month.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+            end_date = next_month.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
             
-            # Fetch from 24 hours before start
             fetch_start_date = start_date - timedelta(hours=24)
             fetch_end_date = end_date
+        else:
+            raise HTTPException(status_code=400, detail="Invalid period")
     else:
         # Use standard calendar day boundaries (00:00-23:59)
         if period == "day":
             start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = start_date + timedelta(days=1) - timedelta(microseconds=1)
+            end_date = start_date + timedelta(days=1)
             fetch_start_date = start_date
             fetch_end_date = end_date
             
         elif period == "week":
-            # Week starts on Monday
             days_since_monday = target_date.weekday()
             start_date = (target_date - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = start_date + timedelta(days=7) - timedelta(microseconds=1)
+            end_date = start_date + timedelta(days=7)
             fetch_start_date = start_date
             fetch_end_date = end_date
             
         elif period == "month":
             start_date = target_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            # Get last day of month
             if target_date.month == 12:
-                end_date = target_date.replace(year=target_date.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+                end_date = target_date.replace(year=target_date.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
             else:
-                end_date = target_date.replace(month=target_date.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0) - timedelta(microseconds=1)
+                end_date = target_date.replace(month=target_date.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
             fetch_start_date = start_date
             fetch_end_date = end_date
         else:
@@ -962,7 +947,7 @@ def get_sleep_summary(
             .select("*")\
             .eq("device_id", int(device_id))\
             .gte("created_at", fetch_start_date.isoformat())\
-            .lte("created_at", fetch_end_date.isoformat())\
+            .lt("created_at", fetch_end_date.isoformat())\
             .order("created_at")\
             .execute()
         
@@ -974,21 +959,20 @@ def get_sleep_summary(
     # Build intervals from occupancy data
     all_intervals = build_occupancy_intervals(occupancy_rows)
     
-    # Filter intervals that OVERLAP with our target date range
-    # An interval overlaps if it either starts OR ends within the range
+    # Filter intervals that overlap with our target date range
     filtered_intervals = []
     for iv in all_intervals:
         interval_start = iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", ""))
         interval_end = iv["end"] if isinstance(iv["end"], datetime) else datetime.fromisoformat(str(iv["end"]).replace("Z", ""))
         
-        # Include interval if it overlaps with [start_date, end_date]
-        if interval_end >= start_date and interval_start <= end_date:
+        # Include interval if it overlaps with [start_date, end_date)
+        if interval_end >= start_date and interval_start < end_date:
             filtered_intervals.append(iv)
     
     # Compute metrics for this range
     metrics = compute_sleep_metrics_for_range(filtered_intervals, start_date, end_date)
     
-    # Prepare intervals for response (convert datetime to ISO strings)
+    # Prepare intervals for response
     intervals_response = []
     for iv in filtered_intervals:
         intervals_response.append({
