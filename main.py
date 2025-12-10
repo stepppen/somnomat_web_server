@@ -886,7 +886,7 @@ async def get_sleep_summary(
 ):
     """
     Get sleep summary for a specific period (day/week/month)
-    Correctly handles sleep sessions that span across calendar days
+    Now correctly handles sleep sessions that span across calendar days
     """
     try:
         print(f"\n=== Sleep Summary Request ===")
@@ -907,17 +907,15 @@ async def get_sleep_summary(
         if sleep_boundary_hour is not None:
             # Use sleep-centric day boundaries
             if period == "day":
-                # Key fix: For "Dec 10 sleep day", we want the sleep that ENDS on Dec 10
-                # This means sleep from evening Dec 9 → morning Dec 10
-                # So boundary is at sleep_boundary_hour on the SELECTED date
-                # And we look BACK 24 hours from there
-                
+                # The key fix: Dec 10 sleep day should capture sleep from previous evening
+                # So we look BACK from the boundary, not forward
+                # Dec 10 @ 03:00 means we want sleep from Dec 9 03:00 to Dec 10 03:00
                 end_date = target_date.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
                 start_date = end_date - timedelta(days=1)
                 
-                # Expand fetch range to capture intervals that might start earlier or end later
-                fetch_start_date = start_date - timedelta(hours=24)
-                fetch_end_date = end_date + timedelta(hours=24)
+                # Expand fetch range to ensure we capture everything
+                fetch_start_date = start_date - timedelta(hours=12)
+                fetch_end_date = end_date + timedelta(hours=12)
                 
             elif period == "week":
                 days_since_monday = target_date.weekday()
@@ -925,8 +923,8 @@ async def get_sleep_summary(
                 end_date = week_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0) + timedelta(days=7)
                 start_date = end_date - timedelta(days=7)
                 
-                fetch_start_date = start_date - timedelta(hours=24)
-                fetch_end_date = end_date + timedelta(hours=24)
+                fetch_start_date = start_date - timedelta(hours=12)
+                fetch_end_date = end_date + timedelta(hours=12)
                 
             elif period == "month":
                 month_start = target_date.replace(day=1)
@@ -938,8 +936,8 @@ async def get_sleep_summary(
                 end_date = next_month.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
                 start_date = month_start.replace(hour=sleep_boundary_hour, minute=0, second=0, microsecond=0)
                 
-                fetch_start_date = start_date - timedelta(hours=24)
-                fetch_end_date = end_date + timedelta(hours=24)
+                fetch_start_date = start_date - timedelta(hours=12)
+                fetch_end_date = end_date + timedelta(hours=12)
             else:
                 raise HTTPException(status_code=400, detail="Invalid period")
         else:
@@ -970,7 +968,7 @@ async def get_sleep_summary(
                 raise HTTPException(status_code=400, detail="Invalid period")
         
         print(f"Fetch range: {fetch_start_date} to {fetch_end_date}")
-        print(f"Logical sleep day: {start_date} to {end_date}")
+        print(f"Logical range: {start_date} to {end_date}")
         
         # Fetch occupancy data from database
         response = supabase.table("raw_occupancy")\
@@ -988,7 +986,7 @@ async def get_sleep_summary(
         all_intervals = build_occupancy_intervals(occupancy_rows)
         print(f"Built {len(all_intervals)} total intervals")
         
-        # IMPROVED: Filter intervals with proper overlap detection
+        # NEW: Better interval filtering that considers sleep sessions spanning boundaries
         filtered_intervals = []
         for iv in all_intervals:
             interval_start = iv["start"] if isinstance(iv["start"], datetime) else datetime.fromisoformat(str(iv["start"]).replace("Z", "+00:00"))
@@ -1000,43 +998,29 @@ async def get_sleep_summary(
             if interval_end.tzinfo is None:
                 interval_end = interval_end.replace(tzinfo=timezone.utc)
             
-            # Include interval if it overlaps with our sleep day range
-            # An interval overlaps if:
-            # - It starts before end_date AND ends after start_date
-            overlaps = interval_start < end_date and interval_end > start_date
+            # Key change: Include interval if ANY part overlaps with range
+            # OR if it's a sleep session that naturally belongs to this period
+            # (starts before but ends during, or starts during)
+            overlaps = interval_end >= start_date and interval_start < end_date
             
             if overlaps:
-                # CRITICAL: Clip the interval to our date range boundaries
-                # This prevents double-counting intervals that span multiple sleep days
-                clipped_start = max(interval_start, start_date)
-                clipped_end = min(interval_end, end_date)
-                clipped_duration = (clipped_end - clipped_start).total_seconds() / 60
-                
-                if clipped_duration > 0:  # Only include if there's actual overlap
-                    filtered_intervals.append({
-                        "start": clipped_start,
-                        "end": clipped_end,
-                        "duration_min": clipped_duration,
-                        "original_start": interval_start,  # Keep for reference
-                        "original_end": interval_end
-                    })
-                    print(f"  ✓ Including interval (clipped): {clipped_start} to {clipped_end} ({clipped_duration:.1f} min)")
+                filtered_intervals.append(iv)
+                print(f"  ✓ Including interval: {interval_start} to {interval_end}")
             else:
                 print(f"  ✗ Excluding interval: {interval_start} to {interval_end}")
         
         print(f"Filtered to {len(filtered_intervals)} intervals within range")
         
-        # Compute metrics for this range using the clipped intervals
+        # Compute metrics for this range
         metrics = compute_sleep_metrics_for_range(filtered_intervals, start_date, end_date)
         
-        # Prepare intervals for response (use original times for display)
+        # Prepare intervals for response
         intervals_response = []
         for iv in filtered_intervals:
             intervals_response.append({
-                "start": iv["original_start"].isoformat() if "original_start" in iv else iv["start"].isoformat(),
-                "end": iv["original_end"].isoformat() if "original_end" in iv else iv["end"].isoformat(),
-                "duration_min": iv["duration_min"],
-                "clipped": "original_start" in iv  # Indicates if interval was clipped
+                "start": iv["start"].isoformat() if isinstance(iv["start"], datetime) else str(iv["start"]),
+                "end": iv["end"].isoformat() if isinstance(iv["end"], datetime) else str(iv["end"]),
+                "duration_min": iv["duration_min"]
             })
         
         result = {
@@ -1052,7 +1036,6 @@ async def get_sleep_summary(
         }
         
         print(f"Returning summary with {len(intervals_response)} intervals")
-        print(f"Total sleep: {metrics.get('sleep_duration_hours', 0):.2f} hours")
         return result
         
     except HTTPException:
@@ -1061,8 +1044,8 @@ async def get_sleep_summary(
         print(f"ERROR in get_sleep_summary: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-    
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}") 
+
 # @app.get("/sleep/{device_id}/summary")
 # def get_sleep_summary(device_id: str):
 #     """Get full sleep summary for dashboard"""
