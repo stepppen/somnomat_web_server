@@ -164,7 +164,7 @@ async def push_aggregated_data(device_id: str):
             print(f"Error inserting raw occupancy: {e}")
             return default_metrics
 
-# need to rethink this
+# need to rethink this ...
 def build_occupancy_intervals(rows: List[Dict]) -> List[Dict]:
     """
     bools occupancy -> continuous intervals.
