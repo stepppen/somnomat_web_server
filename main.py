@@ -889,32 +889,56 @@ def create_command(cmd: PWACommand):
     }
 
 @app.post("/user-settings/{device_id}")
-async def update_user_settings(device_id: str, settings: UserSettingsUpdate):
+def update_user_settings(device_id: str, settings: UserSettingsUpdate):
     """
-    Update user settings (Bed time, Wake up time, Tolerances)
+    Update user sleep settings for a specific device
+    
+    Parameters:
+    - device_id: Device identifier
+    - settings: UserSettingsUpdate object containing bed_time, wake_up_time, and tolerances
     """
     try:
-        # Prepare the data for Supabase
-        update_data = {
+        # Check if device exists
+        device_result = supabase.table("devices").select("id").eq("id", int(device_id)).execute()
+        
+        if not device_result.data:
+            raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
+        
+        existing = supabase.table("user_settings") \
+            .select("vibration, intensity") \
+            .eq("device_id", device_id) \
+            .single() \
+            .execute()
+
+        # Start with existing values first
+        settings_record = existing.data or {}
+
+        # Now overwrite with your new fields
+        settings_record.update({
             "device_id": int(device_id),
             "bed_time": settings.bed_time,
             "wake_up_time": settings.wake_up_time,
             "bed_time_tolerance": settings.bed_time_tolerance,
             "wake_up_tolerance": settings.wake_up_tolerance,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
+            "updated_at": datetime.now(timezone.utc).astimezone().isoformat()
+        })
 
-        # Perform the Upsert
-        # Since we fixed the Unique Constraint earlier, this will now work perfectly.
-        response = supabase.table("user_settings")\
-            .upsert(update_data, on_conflict="device_id")\
+        result = supabase.table("user_settings") \
+            .upsert(settings_record, on_conflict="device_id") \
             .execute()
-            
-        return {"success": True, "data": response.data}
         
+        return {
+            "success": True,
+            "message": f"Settings updated for device {device_id}",
+            "data": result.data[0] if result.data else settings_record
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error updating settings: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Error updating user settings: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update settings: {str(e)}")
+
 
 @app.get("/user-settings/{device_id}")
 async def get_user_settings(device_id: str):
